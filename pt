@@ -1,0 +1,3 @@
+#!/bin/bash
+cp test4me-powercycle $HOME/autostart.dir/500-starttest
+sudo reboot

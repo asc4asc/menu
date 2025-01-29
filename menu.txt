@@ -1,0 +1,11 @@
+This is a help text for the Menu in this Path.
+
+*** Test menu ***
+h) Dieses Helpfile
+rt) reboot Dauer Test
+pt) powercycle Dauer Test
+r) reboot
+s) shutdown/poweroff
+con) goto console tty1
+gui) start gnome with terminal
+doit) alle schrite in todo ausführen.

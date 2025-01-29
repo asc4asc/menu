@@ -1,0 +1,5 @@
+# sudo systemctl start getty@tty1.service
+# systemctl set-default multi-user.target # Grafik aus.
+# systemctl set-default graphical.target # Grafik wieder ein.
+gnome-session-quit --logout --force
+# startx
