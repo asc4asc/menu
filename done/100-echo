@@ -1,5 +1,5 @@
 #!/bin/bash
 echo 100 test me
-mv $0 $HOME/done
+mv $0 ./done
 sleep 5
 #sudo reboot
