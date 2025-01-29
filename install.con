@@ -1,2 +1,0 @@
-#!/bin/bash
-echo 'cd menu && menu'>> $HOME/.profile
