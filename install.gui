@@ -1,0 +1,10 @@
+#!/bin/bash
+cat <<'EOF' >>$HOME/.bashrc
+case $(tty) in
+/dev/pts/0)
+    cd menu && menu
+    ;;
+*)
+    ;;
+esac
+EOF
