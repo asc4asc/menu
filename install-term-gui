@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+#-------------------------------------------------------
+
+usage() {
+  cat <<EOF
+usage: ${0##*/} 
+
+    -h                  Print this help message
+
+Create a live linux image.
+If possible it starts a test with kvm
+with calamaris ..... 
+EOF
+}
+
+while getopts 'h' flag; do
+  case $flag in
+    h)
+      usage
+      exit 0
+      ;;
+  esac
+done
+shift $(( OPTIND - 1 ))
+
+function cat-autostart-entry4gnome
+{
+cat > ${HOME}/.config/autostart/term.desktop << EOF
+[Desktop Entry]
+Type=Application
+# Exec=gnome-terminal 
+# Exec=sudo gnome-terminal
+# Exec=gnome-terminal -- run-parts autostart.dir
+Exec=gnome-terminal 
+Hidden=false
+NoDisplay=false
+X-GNOME-Autostart-enabled=true
+Name[en_US]=term
+Name=term
+Comment[en_US]=
+Comment=
+X-GNOME-Autostart-Delay=0
+EOF
+return 0
+}
+mkdir $HOME/.config/autostart
+cat-autostart-entry4gnome
+
+exit 0
+
+
+

@@ -6,6 +6,11 @@ rt) reboot Dauer Test
 pt) powercycle Dauer Test
 r) reboot
 s) shutdown/poweroff
-con) goto console tty1
-gui) start gnome with terminal
 doit) alle schrite in todo ausführen.
+
+con) break and goto console tty1
+con.enable) Enable das Umschalten auf die console tty1
+
+startx) start gnome with terminal
+gui) Umschalten auf start gnome with terminal
+
