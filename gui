@@ -1,4 +1,4 @@
-sudo /home/ekf/bin/make-auto-login-console -r # 
+sudo make-auto-login-console -r # 
 # sudo systemctl start gdm.service # && sudo make-auto-login-console -r # 
 # sudo systemctl start getty@tty1.service
 # sudo systemctl set-default multi-user.target # Grafik aus.
