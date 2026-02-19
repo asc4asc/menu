@@ -5,7 +5,7 @@
 DIST="${1:-trixie}"
 
 # Zielpfad für die sources.list
-OUTPUT="sources.list"
+OUTPUT="/etc/apt/sources.list"
 
 cat > "$OUTPUT" <<EOF
 # Generated sources.list for Debian ($DIST)
