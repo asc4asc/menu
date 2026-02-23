@@ -1,0 +1,67 @@
+#!/bin/bash
+# Short tool for enable auto login of user. 
+# also remove auto login if needed. 
+
+error=0; trap 'error=$(($?>$error?$?:$error))' ERR # save maximum error code
+
+export LANG=C
+TTY=1
+REMOVE_FLAG=0
+OVER=/tmp/overwrite$$.conf
+
+function make_auto_login() {
+sudo mkdir /etc/systemd/system/getty@tty${TTY}.service.d 
+cat > $OVER <<EOF
+[Service]
+ExecStart=
+ExecStart=-/sbin/agetty --autologin ${USERIN} --noclear %I 38400 linux
+EOF
+sudo cp $OVER /etc/systemd/system/getty@tty${TTY}.service.d/overwrite.conf
+}
+
+function rm_auto_login() {
+  sudo rm -r /etc/systemd/system/getty@tty${TTY}.service.d 
+  exit 0;
+}
+
+usage() {
+
+    cat <<-EOF
+	Install a autologin for a Linux Console.
+	Copyright (C) 2016 Andreas Schockenhoff EKF Elektronik GmbH
+	Report bugs to <asc@ekf.de>.
+	Usage: $0 [OPTIONS] [<user>] 
+	-t Number of the tty terminal. Default is 1.  
+	-e enable autologin
+	-d remove autologin
+	-r remove autologin
+EOF
+exit 0
+}
+
+options=$@ # save all options
+
+# Parse commandline options
+while getopts "edrvh?t:" opt ; do
+    case "$opt" in
+	r|d)	REMOVE_FLAG=1 ;;
+	e)	REMOVE_FLAG=0 ;;
+	v)	verbose=1 v=-v ;;
+	t)	[ ${OPTARG:0:1} = "=" ] && TTY=${OPTARG/=} || TTY=$OPTARG ;;
+	h)	usage ;;
+	?)	usage ;;
+    esac
+done
+shift $(($OPTIND-1))
+
+USERIN=${USER} # ${SUDO_USER} if we use sudo? / check if not set for both?
+[ $1 ] && USERIN=$1
+
+if [[ ${REMOVE_FLAG} == 0 ]] 
+then  
+	make_auto_login
+else 
+	rm_auto_login 
+fi
+
+exit $error

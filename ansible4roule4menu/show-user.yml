@@ -1,0 +1,23 @@
+---
+# This playbook show user 
+
+- name: 
+  hosts: all
+  become: true
+#  gather_facts: true
+
+  tasks:
+    - name: Save local user
+      set_fact:
+        local_user: "{{ lookup('env','USER') }}"
+
+    - name: Benutzer anzeigen 
+      debug:
+        msg: "{{ lookup('env','USER') }}"
+    - name: Benutzer anzeigen 
+      debug:
+        msg: "{{ ansible_env.USER }}"
+    - name: Benutzer anzeigen 
+      debug:
+        msg: "{{ local_user }}"
+

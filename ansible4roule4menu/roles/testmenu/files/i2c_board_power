@@ -1,0 +1,97 @@
+#!/bin/bash
+
+sudo apt install i2c-tools
+sudo modprobe i2c-dev # to prevent problems.
+
+# add checks if all is in order to work!
+
+read_board_handle() {
+    local I2CBus=$1
+    local REGISTER_IO=$2
+
+sudo i2cset -y ${I2CBus} ${REGISTER_IO} 0x03 0x01 b # set power direction pins Handle is Input pin 1 
+let id=$(sudo i2cget -y ${I2CBus} ${REGISTER_IO} 0x0)
+
+local dat=$(sudo i2cget -y ${I2CBus} ${REGISTER_ADDR} 0x0 2>/dev/null)
+
+let result=$(( $id & 0x01 ))
+if [ $result -ne 0 ]; then
+  echo Handle open $id switch power off!
+  dat=$(($dat |  2)) # Power on the most boards
+  # dat=$(($dat |  4))
+  # dat=$(($dat |  8))
+  # dat=$(($dat | 10))
+  # dat=$(($dat | 20))
+  # dat=$(($dat | 40))
+  # dat=$(($dat | 80))
+  echo Handle open $id switch after power off!
+else
+  echo Handle close! $id overwrite power off!
+  dat=$(($dat &  ~2)) # Power on the most boards
+  # dat=$(($dat &  ~4)) 
+  # dat=$(($dat &  ~8))
+  # dat=$(($dat & ~10))
+  # dat=$(($dat & ~20))
+  # dat=$(($dat & ~40))
+  # dat=$(($dat & ~80))
+  echo Handle close! $id overwrite after power off!
+fi
+sudo i2cset -y ${I2CBus} ${REGISTER_IO} 0x01 $dat b
+}
+
+show_id_register() {
+    local PCIDEV=$1
+    local REGISTER_ADDR=$2
+    local BIT_POSITION=$3
+    local NEW_BIT_VALUE=$4
+    local REGISTER_IO=$5
+    
+    # Get the I2C bus number
+    local I2CBus=$(ls -l /sys/bus/i2c/devices/ | grep ${PCIDEV} | awk '{print $9}' | grep i2c | sed 's/i2c-//')
+
+    # Check if the mux device is present
+    if (sudo i2cget -y ${I2CBus} ${REGISTER_ADDR} 0x0 2>/dev/null >/dev/null); then
+         # Read the current register value
+        local dat=$(sudo i2cget -y ${I2CBus} ${REGISTER_ADDR} 0x0 2>/dev/null)
+
+        # Modify the bit
+        if [ $NEW_BIT_VALUE -eq 1 ]; then
+            dat=$(($dat | (2 << BIT_POSITION)))
+        else
+            dat=$(($dat & ~(2 << BIT_POSITION)))
+        fi
+
+        # Write the modified value back to the register
+        sudo i2cset -y ${I2CBus} ${REGISTER_ADDR} 0x0 $dat b
+
+        read_board_handle ${I2CBus} ${REGISTER_IO}
+        
+        # close multiplexer port
+        dat=$(sudo i2cget -y ${I2CBus} ${REGISTER_ADDR} 0x0)
+        dat=$((dat & ~(2 << BIT_POSITION)))
+        sudo i2cset -y ${I2CBus} ${REGISTER_ADDR} 0x0 $dat b    
+
+    else
+        let local slot=$REGISTER_ADDR-112
+        echo "No device found on I2C/PCIDEV bus: ${PCIDEV} on Slot: ${slot}!"
+    fi
+}
+
+
+# Example usage
+PCIDEV="0000:00:15.0"
+let REGISTER_ADDR=0x70
+BIT_POSITION=0
+NEW_BIT_VALUE=1
+REGISTER_IO=0x3d 
+
+# show_id_register $PCIDEV $REGISTER_ADDR $BIT_POSITION $NEW_BIT_VALUE $REGISTER_IO
+
+PCIDEV="0000:00:15.1"
+
+let REGISTER_ADDR=0x70 
+for i in {0..7}
+do 
+  show_id_register $PCIDEV $REGISTER_ADDR $BIT_POSITION $NEW_BIT_VALUE $REGISTER_IO
+  let REGISTER_ADDR=$REGISTER_ADDR+1
+done

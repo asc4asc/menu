@@ -1,0 +1,83 @@
+---
+- name: Install packages needed
+  ansible.builtin.apt:
+    name:
+      - ansible
+    state: latest
+
+- name: Copy files from the 'files' directory
+  copy:
+    src: "{{ item }}"
+    dest: "/usr/local/bin/{{ item }}"
+    mode: '0755'
+  with_items:
+    - sudo4user
+    - clean.boot
+    - gen-new-hostname-ip.bash
+    - make-auto-login-console
+
+- name: Copy files from the 'files' directory
+  copy:
+    src: "{{ item }}"
+    dest: "/home/{{ local_user }}/{{ item }}"
+    mode: '0755'
+    owner: "{{ local_user }}"
+    group: "{{ local_user }}"
+  with_items:
+    - check4hardware-change
+    - p
+    - r
+    - start-reboot
+    - start-powercycle
+    - stress-test
+    - bios-info.bash
+    - start2grafik-back
+    - start2console
+    - logout-gnome
+    - 900-timeout-reboot
+    - 900-timeout-powercycle
+    - makeit4test
+    - put-git-sshkeys2authorized_keys
+    - net-test
+    - ssd-test
+    - i2c-test
+    - id2board_name
+    - i2c_board_power
+    - ringbuf.py
+     
+- name: Ensure .bash_aliases file exists
+  copy:
+    dest: "/home/{{ local_user }}/.bash_aliases"
+    content: |
+      alias ll='ls -la'
+      alias gs='git status'
+      alias gp='git pull'
+      alias menu='echo $PATH | grep :.$ > /dev/null || PATH=$PATH:. && cat menu.txt' 
+       
+- name: create a small file with instructions
+  copy:
+    owner: "{{ local_user }}"
+    group: "{{ local_user }}"
+    dest: "/home/{{ local_user }}/menu.txt" 
+    content: |
+      ---------------------------------------------------
+      p) poweroff 
+      r) reboot
+      stress-test) Simple script to make CPU stress.
+      clean.boot) Clean boot disk. Example for a new Install over the net.
+      Please use start-reboot or start-restart to start a endless test. 
+      ---------------------------------------------------
+      
+- name: Add a lines to .bashrc
+  ansible.builtin.blockinfile:
+    path: "/home/{{ local_user }}/.bashrc"
+    marker: "# {mark} menu is ready"
+    block: |
+      PATH=$PATH:"."
+      if [ $(tty) == /dev/tty1 ] || [ $(tty) == /dev/pts/0 ]; then if [ -d "todo" ] && [ "$(ls -A todo)" ] ; then run-parts todo && cd menu ; else cd && cd menu && menu; fi; fi
+    
+- name: create a file 
+  copy:
+    dest: /this_is_a_test_install 
+    content: |
+      file to mark that this is only a test install and can deleated easy.

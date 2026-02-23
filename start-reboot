@@ -1,0 +1,6 @@
+#! /bin/bash
+
+mkdir -p ../todo
+cp scripts4todo/900-timeout-reboot ../todo/
+../todo/900-timeout-reboot
+exit 0

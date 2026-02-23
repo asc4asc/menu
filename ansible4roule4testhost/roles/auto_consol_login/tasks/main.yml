@@ -1,0 +1,32 @@
+---
+- name: Install packages needed
+  ansible.builtin.apt:
+    name:
+      - ansible
+    state: latest
+
+- name: Deploy script
+  ansible.builtin.copy:
+    src: make-auto-login-console
+    dest: /usr/local/bin/
+    mode: '0755'
+
+- name: Create autologin service override directory
+  ansible.builtin.file:
+    path: /etc/systemd/system/getty@tty1.service.d
+    state: directory
+    mode: '0755'
+
+- name: Create autologin service override file
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/getty@tty1.service.d/override.conf
+    content: |
+      [Service]
+      ExecStart=
+      ExecStart=-/sbin/agetty --autologin ansible --noclear %I $TERM
+    mode: '0644'
+  notify: Restart tty1
+
+- name: Reload systemd daemon
+  ansible.builtin.systemd:
+    daemon_reload: yes

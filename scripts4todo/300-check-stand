@@ -1,0 +1,2 @@
+#!/bin/bash
+./menu/check4hardware-change || read

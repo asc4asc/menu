@@ -1,0 +1,62 @@
+#!/bin/bash
+
+# File to store the previous hardware state
+PREV_HW_FILE="/home/ansible/prev_hw_info.txt"
+
+# Function to get current hardware information
+get_hw_info() {
+    #sudo lshw -short
+    sudo lspci -vvv
+}
+
+# Function to update the hardware information
+update_hw_info() {
+    echo "Updating hardware information..."
+    get_hw_info > "$PREV_HW_FILE"
+    echo "Hardware information updated."
+}
+
+# Function to display help
+show_help() {
+    echo "Usage: $0 [OPTIONS]"
+    echo ""
+    echo "Options:"
+    echo "  -u, --update    Update the stored hardware information"
+    echo "  -h, --help      Show this help message"
+    echo ""
+    echo "This script checks for hardware changes on your Debian system."
+    echo "If no options are provided, it will compare the current hardware"
+    echo "information with the previously stored information and display"
+    echo "any changes."
+}
+
+# Parse command-line options
+while [[ "$#" -gt 0 ]]; do
+    case $1 in
+        -u|--update) update_hw_info; exit 0 ;;
+        -h|--help) show_help; exit 0 ;;
+        *) echo "Unknown option: $1"; show_help; exit 1 ;;
+    esac
+    shift
+done
+
+# Get current hardware information
+CURRENT_HW_INFO=$(get_hw_info)
+
+# Check if the previous hardware file exists
+if [ -f "$PREV_HW_FILE" ]; then
+    # Read the previous hardware information
+    PREV_HW_INFO=$(cat "$PREV_HW_FILE")
+
+    # Compare the current and previous hardware information
+    if [ "$CURRENT_HW_INFO" != "$PREV_HW_INFO" ]; then
+        echo "Hardware changes detected:"
+        diff <(echo "$PREV_HW_INFO") <(echo "$CURRENT_HW_INFO")
+        read 
+    else
+        echo "No hardware changes detected."
+    fi
+else
+    echo "Previous hardware information not found. Creating a new one."
+    update_hw_info
+fi

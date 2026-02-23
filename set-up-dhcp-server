@@ -1,0 +1,472 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+"""
+Debian-specific setup (dnsmasq + iperf3) with DEFAULT CONSTANTS at the top.
+- Works out-of-the-box using script defaults (no long CLI needed)
+- Optionally: an INI file can override the defaults
+- Facts: IP is assigned at runtime (no Netplan/NetworkManager edits), dnsmasq runs DHCP-only
+  (port=0) bound to the given interface, iperf3 is a systemd service bound to the server IP
+
+Requirements: Debian (apt-get), systemd, root privileges
+Usage (defaults only):
+  sudo ./setup_dhcp_iperf3_debian_const_en.py
+With INI:
+  sudo ./setup_dhcp_iperf3_debian_const_en.py --config /path/dhcp_iperf_debian.ini
+Cleanup:
+  sudo ./setup_dhcp_iperf3_debian_const_en.py --remove [--config ...]
+"""
+
+# ==========================
+#   DEFAULT CONSTANTS
+# ==========================
+# NOTE: Adjust iface + address to match your environment.
+DEFAULT_IFACE          = "enp4s0"          # Interface name
+DEFAULT_ADDRESS        = "192.168.50.1/24" # Server IPv4/CIDR
+DEFAULT_GATEWAY_MODE   = "server_ip"       # "server_ip" or "explicit"
+DEFAULT_GATEWAY        = ""                # used only if MODE == explicit
+DEFAULT_DNS_CSV        = "1.1.1.1,8.8.8.8" # DNS servers (CSV)
+DEFAULT_LEASE          = "12h"             # Lease duration
+DEFAULT_DOMAIN         = ""                # optional
+DEFAULT_AUTHORITATIVE  = False              # conservative (avoid conflicts)
+DEFAULT_FIREWALL       = True               # open ports automatically
+
+# DHCP range strategy:
+#  "margin" = derive automatically from subnet with margins;
+#  "fixed"  = use fixed start/end (must be inside the subnet)
+DEFAULT_RANGE_STRATEGY = "margin"
+# Fixed range (used only if STRATEGY == "fixed")
+DEFAULT_RANGE_FIXED_START = "192.168.50.100"
+DEFAULT_RANGE_FIXED_END   = "192.168.50.200"
+
+# Parameters for margin strategy
+RANGE_THRESH_LARGE   = 40   # if host count >= 40: large margins
+RANGE_THRESH_MEDIUM  = 10   # if host count >= 10: medium margins
+RANGE_MARGIN_LARGE   = 10   # exclude first/last N host addresses
+RANGE_MARGIN_MEDIUM  = 2
+EXCLUDE_GATEWAY_FROM_RANGE = True
+
+# INI file search order
+DEFAULT_LOCAL_INI = "./dhcp_iperf_debian.ini"
+DEFAULT_ETC_INI   = "/etc/dhcp_iperf_debian.ini"
+DEFAULT_FALLBACK  = ""  # empty = no fallback file
+
+# ==========================
+#   IMPLEMENTATION
+# ==========================
+
+import argparse
+import configparser
+import os
+import re
+import shutil
+import subprocess
+import sys
+from ipaddress import IPv4Interface, IPv4Address, IPv4Network
+
+DNSMASQ_DIR = "/etc/dnsmasq.d"
+
+
+def run(cmd: str, check: bool = True):
+    """Run a shell command and print it for transparency."""
+    print(f"+ {cmd}")
+    return subprocess.run(cmd, shell=True, check=check)
+
+
+def require_root():
+    """Ensure the script is executed with root privileges."""
+    if os.geteuid() != 0:
+        print("Error: please run as root (sudo).", file=sys.stderr)
+        sys.exit(1)
+
+
+def cmd_exists(name: str) -> bool:
+    """Check if a command exists in PATH."""
+    return shutil.which(name) is not None
+
+
+def install_packages():
+    """Install required packages via apt-get (Debian/Ubuntu)."""
+    if not cmd_exists("apt-get"):
+        print("This script targets Debian with apt-get.", file=sys.stderr)
+        sys.exit(1)
+    run("apt-get update -y")
+    run("DEBIAN_FRONTEND=noninteractive apt-get install -y dnsmasq iperf3")
+
+
+def resolve_config_path(cli_config: str | None) -> str | None:
+    """Return the first existing config path according to the search order."""
+    candidates = []
+    if cli_config:
+        candidates.append(cli_config)
+    candidates.extend([DEFAULT_LOCAL_INI, DEFAULT_ETC_INI])
+    if DEFAULT_FALLBACK:
+        candidates.append(DEFAULT_FALLBACK)
+    for p in candidates:
+        if p and os.path.isfile(p):
+            return p
+    return None
+
+
+def derive_range_margin(ifc: IPv4Interface) -> tuple[IPv4Address, IPv4Address]:
+    """Derive a DHCP range from the subnet using margins and excluding the gateway if requested."""
+    net: IPv4Network = ifc.network
+    first_host = int(net.network_address) + 1
+    last_host  = int(net.broadcast_address) - 1
+    total_hosts = last_host - first_host + 1
+    if total_hosts < 2:
+        print(f"Subnet {net.with_prefixlen} too small for DHCP (no host addresses).", file=sys.stderr)
+        sys.exit(1)
+
+    if total_hosts >= RANGE_THRESH_LARGE:
+        rs = first_host + RANGE_MARGIN_LARGE
+        re = last_host  - RANGE_MARGIN_LARGE
+    elif total_hosts >= RANGE_THRESH_MEDIUM:
+        rs = first_host + RANGE_MARGIN_MEDIUM
+        re = last_host  - RANGE_MARGIN_MEDIUM
+    else:
+        rs = first_host
+        re = last_host
+
+    if EXCLUDE_GATEWAY_FROM_RANGE:
+        gw = int(ifc.ip)
+        if rs <= gw <= re:
+            if gw == rs:
+                rs += 1
+            elif gw == re:
+                re -= 1
+            else:
+                # Prefer the block after the gateway
+                if (re - gw) >= (gw - rs):
+                    rs = gw + 1
+                else:
+                    re = gw - 1
+    if rs > re:
+        print("Derived DHCP range would be invalid; set DEFAULT_RANGE_STRATEGY='fixed' and provide fixed values.", file=sys.stderr)
+        sys.exit(1)
+    return IPv4Address(rs), IPv4Address(re)
+
+
+def read_config(cfg_path: str | None):
+    """Read configuration, apply DEFAULT CONSTANTS, and optionally override with INI."""
+    # Base from constants
+    iface         = DEFAULT_IFACE
+    address       = DEFAULT_ADDRESS
+    dns_csv       = DEFAULT_DNS_CSV
+    lease         = DEFAULT_LEASE
+    domain        = DEFAULT_DOMAIN
+    authoritative = DEFAULT_AUTHORITATIVE
+    firewall      = DEFAULT_FIREWALL
+
+    # Gateway and range strategy
+    gateway_mode  = DEFAULT_GATEWAY_MODE
+    gateway_str   = DEFAULT_GATEWAY
+    range_strategy = DEFAULT_RANGE_STRATEGY
+    range_fixed_start = DEFAULT_RANGE_FIXED_START
+    range_fixed_end   = DEFAULT_RANGE_FIXED_END
+
+    # Optionally load and override from INI
+    cfg = configparser.ConfigParser()
+    if cfg_path:
+        cfg.read(cfg_path)
+        if "network" not in cfg:
+            print("Section [network] missing in INI.", file=sys.stderr)
+            sys.exit(1)
+        iface = cfg["network"].get("iface", iface).strip()
+        address = cfg["network"].get("address", address).strip()
+        dns_csv = cfg["network"].get("dns", dns_csv).strip()
+        lease   = cfg["network"].get("lease", lease).strip()
+        domain  = cfg["network"].get("domain", domain).strip()
+        authoritative = cfg["network"].getboolean("authoritative", fallback=authoritative)
+        firewall      = cfg["network"].getboolean("firewall", fallback=firewall)
+        # Optional explicit gateway/range
+        gateway_str = cfg["network"].get("gateway", gateway_str).strip()
+        range_fixed_start = cfg["network"].get("range_start", range_fixed_start).strip()
+        range_fixed_end   = cfg["network"].get("range_end", range_fixed_end).strip()
+        # Strategy overrides
+        range_strategy = cfg["network"].get("range_strategy", range_strategy).strip()
+        gateway_mode   = cfg["network"].get("gateway_mode", gateway_mode).strip()
+
+    # Mandatory: iface + address
+    if not iface:
+        print("Missing mandatory parameter: iface", file=sys.stderr)
+        sys.exit(1)
+    if not address:
+        print("Missing mandatory parameter: address", file=sys.stderr)
+        sys.exit(1)
+
+    try:
+        ifc = IPv4Interface(address)
+    except Exception:
+        print(f"Invalid IPv4/CIDR in 'address': {address}", file=sys.stderr)
+        sys.exit(1)
+
+    # Determine gateway
+    if gateway_mode == "server_ip":
+        gateway = ifc.ip
+    elif gateway_mode == "explicit":
+        try:
+            gateway = IPv4Address(gateway_str) if gateway_str else ifc.ip
+        except Exception:
+            print(f"Invalid gateway value: {gateway_str}", file=sys.stderr)
+            sys.exit(1)
+    else:
+        print(f"Invalid gateway_mode: {gateway_mode}", file=sys.stderr)
+        sys.exit(1)
+
+    # Determine DHCP range
+    if range_strategy == "fixed":
+        try:
+            rs = IPv4Address(range_fixed_start)
+            re = IPv4Address(range_fixed_end)
+        except Exception:
+            print("Invalid fixed range (range_start/range_end).", file=sys.stderr)
+            sys.exit(1)
+        range_start, range_end = rs, re
+    elif range_strategy == "margin":
+        range_start, range_end = derive_range_margin(ifc)
+    else:
+        print(f"Invalid range_strategy: {range_strategy}", file=sys.stderr)
+        sys.exit(1)
+
+    net = ifc.network
+    # Validate subnet consistency
+    if not (range_start in net and range_end in net and gateway in net):
+        print(f"IP, DHCP range and gateway must be in the same {net.with_prefixlen} subnet.", file=sys.stderr)
+        sys.exit(1)
+    if int(range_start) > int(range_end):
+        print("range_start must be <= range_end.", file=sys.stderr)
+        sys.exit(1)
+    # Validate lease format
+#    if not re.match(r"^[0-9]+[smhd]?$", lease):
+#        print("Unexpected lease format (e.g., 12h, 60m, 3600).", file=sys.stderr)
+#        sys.exit(1)
+    # Validate DNS list
+    for d in [x.strip() for x in dns_csv.split(",") if x.strip()]:
+        try:
+            IPv4Address(d)
+        except Exception:
+            print(f"Invalid DNS server: {d}", file=sys.stderr)
+            sys.exit(1)
+
+    return {
+        "iface": iface,
+        "ifc": ifc,
+        "net": net,
+        "range_start": range_start,
+        "range_end": range_end,
+        "gateway": gateway,
+        "dns_csv": dns_csv,
+        "lease": lease,
+        "domain": domain,
+        "authoritative": authoritative,
+        "firewall": firewall,
+    }
+
+
+def ensure_ip_on_interface(iface: str, ifc: IPv4Interface):
+    """Bring interface up and assign the IPv4 if not already present."""
+    run(f"ip link set {iface} up")
+    check_cmd = f"ip -4 addr show dev {iface} | grep -w '{ifc.ip}/{ifc.network.prefixlen}'"
+    res = subprocess.run(check_cmd, shell=True)
+    if res.returncode != 0:
+        run(f"ip addr add {ifc.ip}/{ifc.network.prefixlen} dev {iface}")
+
+
+def write_dnsmasq_config(cfg: dict) -> str:
+    """Write a dnsmasq DHCP-only config bound to the target interface."""
+    iface = cfg["iface"]
+    net = cfg["net"]
+    range_start = cfg["range_start"]
+    range_end = cfg["range_end"]
+    gateway = cfg["gateway"]
+    dns_csv = cfg["dns_csv"]
+    lease = cfg["lease"]
+    domain = cfg["domain"]
+    authoritative = cfg["authoritative"]
+
+    os.makedirs(DNSMASQ_DIR, exist_ok=True)
+    conf_path = os.path.join(DNSMASQ_DIR, f"dhcp-{iface}.conf")
+
+    lines = [
+        f"# dhcp-{iface}.conf – auto-generated",
+        "port=0",                   # disable embedded DNS; DHCP only
+        f"interface={iface}",
+        "bind-interfaces",
+        "domain-needed",
+        "bogus-priv",
+    ]
+    if authoritative:
+        lines.append("dhcp-authoritative")
+    lines.append(f"dhcp-range={range_start},{range_end},{net.netmask},{lease}")
+    lines.append(f"dhcp-option=option:router,{gateway}")
+    lines.append(f"dhcp-option=option:dns-server,{dns_csv}")
+    if domain:
+        lines.append(f"domain={domain}")
+        lines.append(f"dhcp-option=option:domain-search,{domain}")
+
+    with open(conf_path, "w") as f:
+        f.write("\n".join(lines) + "\n")
+
+    return conf_path
+
+
+def systemd_enable_restart_dnsmasq():
+    """Enable and restart the dnsmasq service."""
+    run("systemctl enable dnsmasq >/dev/null 2>&1 || true", check=False)
+    run("systemctl restart dnsmasq")
+
+
+def firewall_open(cfg: dict):
+    """Open firewall ports for DHCP and iperf3 (ufw preferred, iptables fallback)."""
+    if not cfg["firewall"]:
+        print("Firewall rules: skipped (firewall=false).")
+        return
+    # DHCP server: UDP/67; iperf3: TCP/UDP 5201
+    if cmd_exists("ufw") and subprocess.run("ufw status", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0:
+        run("ufw allow proto udp to any port 67 comment 'dhcp-server' || true", check=False)
+        run("ufw allow 5201/tcp comment 'iperf3' || true", check=False)
+        run("ufw allow 5201/udp comment 'iperf3' || true", check=False)
+        print("ufw: opened UDP/67 and TCP/UDP 5201.")
+        return
+    if cmd_exists("iptables"):
+        run("iptables -C INPUT -p udp --dport 67 -j ACCEPT 2>/dev/null || iptables -A INPUT -p udp --dport 67 -j ACCEPT", check=False)
+        run("iptables -C INPUT -p tcp --dport 5201 -j ACCEPT 2>/dev/null || iptables -A INPUT -p tcp --dport 5201 -j ACCEPT", check=False)
+        run("iptables -C INPUT -p udp --dport 5201 -j ACCEPT 2>/dev/null || iptables -A INPUT -p udp --dport 5201 -j ACCEPT", check=False)
+        print("iptables: temporarily opened UDP/67 and TCP/UDP 5201 (non-persistent).")
+
+
+def firewall_close(cfg: dict):
+    """Remove firewall rules for DHCP and iperf3 (ufw preferred, iptables fallback)."""
+    if not cfg["firewall"]:
+        return
+    if cmd_exists("ufw") and subprocess.run("ufw status", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0:
+        run("ufw delete allow proto udp to any port 67 || true", check=False)
+        run("ufw delete allow 5201/tcp || true", check=False)
+        run("ufw delete allow 5201/udp || true", check=False)
+        print("ufw: removed rules.")
+        return
+    if cmd_exists("iptables"):
+        run("iptables -D INPUT -p udp --dport 67 -j ACCEPT 2>/dev/null || true", check=False)
+        run("iptables -D INPUT -p tcp --dport 5201 -j ACCEPT 2>/dev/null || true", check=False)
+        run("iptables -D INPUT -p udp --dport 5201 -j ACCEPT 2>/dev/null || true", check=False)
+        print("iptables: removed temporary rules.")
+
+
+def write_iperf3_service(cfg: dict) -> str:
+    """Create and start a systemd unit for iperf3 bound to the server IP."""
+    iface = cfg["iface"]
+    ifc = cfg["ifc"]
+    svc_path = f"/etc/systemd/system/iperf3-{iface}.service"
+
+    iperf_bin = shutil.which("iperf3") or "/usr/bin/iperf3"
+    if not os.path.exists(iperf_bin):
+        print("iperf3 not found, although the package was installed.", file=sys.stderr)
+        sys.exit(1)
+
+    unit = f"""[Unit]
+Description=iperf3 server bound to {ifc.ip} on {iface}
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart={iperf_bin} -s -B {ifc.ip}
+Restart=always
+RestartSec=2
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+ProtectKernelModules=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target
+"""
+    with open(svc_path, "w") as f:
+        f.write(unit)
+
+    run("systemctl daemon-reload")
+    run(f"systemctl enable --now iperf3-{iface}.service")
+    return svc_path
+
+
+def remove(cfg: dict):
+    """Stop and remove iperf3 unit and dnsmasq per-interface config; drop IP and firewall rules."""
+    iface = cfg["iface"]
+    ifc = cfg["ifc"]
+    conf_path = os.path.join(DNSMASQ_DIR, f"dhcp-{iface}.conf")
+    svc_path = f"/etc/systemd/system/iperf3-{iface}.service"
+
+    print("Stopping iperf3 service...")
+    run(f"systemctl stop iperf3-{iface}.service || true", check=False)
+    run(f"systemctl disable iperf3-{iface}.service || true", check=False)
+    if os.path.exists(svc_path):
+        os.remove(svc_path)
+
+    print("Removing dnsmasq per-interface configuration...")
+    if os.path.exists(conf_path):
+        run("systemctl stop dnsmasq || true", check=False)
+        os.remove(conf_path)
+        run("systemctl daemon-reload || true", check=False)
+        run("systemctl restart dnsmasq || true", check=False)
+
+    print("Dropping assigned IP from interface...")
+    run(f"ip addr del {ifc.ip}/{ifc.network.prefixlen} dev {iface} 2>/dev/null || true", check=False)
+
+    print("Reverting firewall rules...")
+    firewall_close(cfg)
+
+    run("systemctl daemon-reload || true", check=False)
+    print("Cleanup finished.")
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Debian: configure dnsmasq (DHCP) and iperf3 with DEFAULT CONSTANTS.")
+    parser.add_argument("--config", help="Path to INI config (optional).")
+    parser.add_argument("--remove", action="store_true", help="Remove configuration and revert changes.")
+    args = parser.parse_args()
+
+    require_root()
+
+    cfg_path = resolve_config_path(args.config)
+    if cfg_path:
+        print(f"Config file: {cfg_path}")
+    else:
+        print("No INI file found; using script defaults.")
+
+    cfg = read_config(cfg_path)
+
+    if args.remove:
+        remove(cfg)
+        return
+
+    install_packages()
+    ensure_ip_on_interface(cfg["iface"], cfg["ifc"]) 
+    conf_path = write_dnsmasq_config(cfg)
+    print(f"dnsmasq config: {conf_path}")
+    systemd_enable_restart_dnsmasq()
+    firewall_open(cfg)
+    svc_path = write_iperf3_service(cfg)
+    print(f"iperf3 unit: {svc_path}")
+
+    ifc = cfg["ifc"]
+    print("\n=== Done ===")
+    print(f"Interface:   {cfg['iface']}")
+    print(f"Server IP:   {ifc.ip}/{ifc.network.prefixlen}")
+    print(f"DHCP range:  {cfg['range_start']} - {cfg['range_end']}  (lease: {cfg['lease']})")
+    print(f"Gateway:     {cfg['gateway']}")
+    print(f"DNS:         {cfg['dns_csv']}")
+    if cfg["domain"]:
+        print(f"Domain:      {cfg['domain']}")
+    print("\nTests:")
+    print(f"  DHCP: connect a client to the {cfg['iface']} segment; expect a lease within the range.")
+    print(f"  iperf3 TCP:  iperf3 -c {ifc.ip}")
+    print(f"  iperf3 UDP:  iperf3 -u -b 0 -c {ifc.ip}")
+
+
+if __name__ == "__main__":
+    main()

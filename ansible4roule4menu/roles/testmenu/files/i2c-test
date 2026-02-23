@@ -1,0 +1,173 @@
+#!/bin/bash
+
+sudo apt install i2c-tools
+sudo modprobe i2c-dev # to prevent problems.
+
+# add checks if all is in order to work!
+
+decode_board_id() {
+    local I2CBus=$1
+    local REGISTER_IO=$2
+
+local hex2quad=( 0 1 4 5 16 17 20 21 64 65 68 69 80 81 84 85 )
+local power_pin_tab=( 0x3F 0xBF 0xFF )
+revId2rev=( 0 1 2 -1 3 4 5 6 7 8 -1 -1 -1 -1 -1 )
+
+local let i=0
+local let board=0
+local let rev=0
+
+sudo i2cset -y ${I2CBus} ${REGISTER_IO} 0x03 0x3F b # set power direction pins 
+
+for out in "${power_pin_tab[@]}"
+do
+  sudo i2cset -y ${I2CBus} ${REGISTER_IO} 0x01 $out b # set power pins 
+  id=$(sudo i2cget -y ${I2CBus} ${REGISTER_IO} 0x0)
+
+  # let i=$i+1
+  # printf id$i=0x%X $(($id & 0x0F))
+  # echo -n " "
+  # printf rid$i=0x%X $(($id>>4 & 0x03)) 
+  # echo
+
+  let rid=$(($id>>4 & 0x03))
+  let rev=$rev+"${hex2quad[$rid]}"
+
+  let id1=$(($id & 0x0F))
+  let board=$board+"${hex2quad[$id1]}"
+
+done
+echo Board Nr: $board with rev: "${revId2rev[$rev]}"
+
+# Bit 6,7 are not used because they are uesed for decoding.
+# echo
+# Info for decode further.
+# power_pin_tab[] = { 0x3F, 0xBF, 0xFF }
+# uint8_t hex2quad[] = {  0,  1,  4,  5, 16, 17, 20, 21, 64, 65, 68, 69, 80, 81, 84, 85 };
+# uint8_t revId2rev[] = {  0,  1,  2, -1,  3,  4,  5,  6,  7,  8, -1, -1, -1, -1, -1 };
+# boardId += hex2quad[expData & 0x0F];		// Mask bit 3:0
+# revId += hex2quad[(expData >> 4) & 0x03];	// Mask bit 5:4
+
+}
+
+
+show_id_register() {
+    local PCIDEV=$1
+    local REGISTER_ADDR=$2
+    local BIT_POSITION=$3
+    local NEW_BIT_VALUE=$4
+    local REGISTER_IO=$5
+    
+    # Get the I2C bus number
+    local I2CBus=$(ls -l /sys/bus/i2c/devices/ | grep ${PCIDEV} | awk '{print $9}' | grep i2c | sed 's/i2c-//')
+
+    # Check if the mux device is present
+    if (sudo i2cget -y ${I2CBus} ${REGISTER_ADDR} 0x0 2>/dev/null >/dev/null); then
+         # Read the current register value
+        local dat=$(sudo i2cget -y ${I2CBus} ${REGISTER_ADDR} 0x0 2>/dev/null)
+
+        # Modify the bit
+        if [ $NEW_BIT_VALUE -eq 1 ]; then
+            dat=$(($dat | (1 << BIT_POSITION)))
+        else
+            dat=$(($dat & ~(1 << BIT_POSITION)))
+        fi
+
+        # Write the modified value back to the register
+        sudo i2cset -y ${I2CBus} ${REGISTER_ADDR} 0x0 $dat b
+
+        # Optional: dump eeprom / 
+        sudo i2cdump -y ${I2CBus} 0x55 b
+        # may be nicer?
+        # echo 24c02 0x55 >/sys/bus/i2c/devices/${I2CBus}-0077/channel-0/new_device 
+        # hd /sys/bus/i2c/devices/${I2CBus}-0077/channel-0/21-0055/eeprom
+
+        decode_board_id ${I2CBus} ${REGISTER_IO}
+      
+        # close multiplexer port
+        dat=$(sudo i2cget -y ${I2CBus} ${REGISTER_ADDR} 0x0)
+        dat=$((dat & ~(1 << BIT_POSITION)))
+        sudo i2cset -y ${I2CBus} ${REGISTER_ADDR} 0x0 $dat b      
+
+        local dat=$(sudo i2cget -y ${I2CBus} ${REGISTER_ADDR} 0x0 2>/dev/null)
+
+        # Modify the bit
+        if [ $NEW_BIT_VALUE -eq 1 ]; then
+            dat=$(($dat | (2 << BIT_POSITION)))
+        else
+            dat=$(($dat & ~(2 << BIT_POSITION)))
+        fi
+
+        # Write the modified value back to the register
+        sudo i2cset -y ${I2CBus} ${REGISTER_ADDR} 0x0 $dat b
+               
+        # close multiplexer port
+        dat=$(sudo i2cget -y ${I2CBus} ${REGISTER_ADDR} 0x0)
+        dat=$((dat & ~(2 << BIT_POSITION)))
+        sudo i2cset -y ${I2CBus} ${REGISTER_ADDR} 0x0 $dat b    
+
+    else
+        let local slot=$REGISTER_ADDR-112
+        echo "No device found on I2C/PCIDEV bus: ${PCIDEV} on Slot: ${slot}!"
+    fi
+}
+
+
+modify_i2c_register() {
+    local PCIDEV=$1
+    local REGISTER_ADDR=$2
+    local BIT_POSITION=$3
+    local NEW_BIT_VALUE=$4
+
+    # Get the I2C bus number
+    local I2CBus=$(ls -l /sys/bus/i2c/devices/ | grep ${PCIDEV} | awk '{print $9}' | grep i2c | sed 's/i2c-//')
+
+    # Check if the device is present
+    if (sudo i2cget -y ${I2CBus} ${REGISTER_ADDR} 0x0 2>/dev/null >/dev/null); then
+        # Read the current register value
+        local dat=$(sudo i2cget -y ${I2CBus} ${REGISTER_ADDR} 0x0 2>/dev/null)
+
+        # Modify the bit
+        if [ $NEW_BIT_VALUE -eq 1 ]; then
+            dat=$(($dat | (1 << BIT_POSITION)))
+        else
+            dat=$(($dat & ~(1 << BIT_POSITION)))
+        fi
+
+        # Write the modified value back to the register
+        sudo i2cset -y ${I2CBus} ${REGISTER_ADDR} 0x0 $dat b
+
+        # Optional: Dump the EEPROM data
+        sudo i2cdump -y ${I2CBus} 0x55 b
+
+        # Reset the bit (example)
+        dat=$(sudo i2cget -y ${I2CBus} ${REGISTER_ADDR} 0x0)
+        dat=$((dat & ~(1 << BIT_POSITION)))
+        sudo i2cset -y ${I2CBus} ${REGISTER_ADDR} 0x0 $dat b
+    else
+        let local slot=$REGISTER_ADDR-112
+        echo "No device found on I2C/PCIDEV bus: ${PCIDEV} on Slot: ${slot}!"
+    fi
+}
+
+ 
+
+# Example usage
+PCIDEV="0000:00:15.0"
+let REGISTER_ADDR=0x70
+BIT_POSITION=0
+NEW_BIT_VALUE=1
+REGISTER_IO=0x3d 
+
+# modify_i2c_register $PCIDEV $REGISTER_ADDR $BIT_POSITION $NEW_BIT_VALUE
+show_id_register $PCIDEV $REGISTER_ADDR $BIT_POSITION $NEW_BIT_VALUE $REGISTER_IO
+
+PCIDEV="0000:00:15.1"
+
+let REGISTER_ADDR=0x70 
+for i in {0..7}
+do 
+  # modify_i2c_register $PCIDEV $REGISTER_ADDR $BIT_POSITION $NEW_BIT_VALUE
+  show_id_register $PCIDEV $REGISTER_ADDR $BIT_POSITION $NEW_BIT_VALUE $REGISTER_IO
+  let REGISTER_ADDR=$REGISTER_ADDR+1
+done

@@ -1,0 +1,9 @@
+#!/bin/bash
+gsettings set org.gnome.settings-daemon.plugins.power sleep-inactive-ac-type "nothing" # nicht einschlafen!
+gsettings set org.gnome.SessionManager logout-prompt "false" # Damit man auch mit dem Griff runterfahren kann ohne 60s zu warten.
+gsettings set org.gnome.shell favorite-apps "['org.gnome.Terminal.desktop','org.gnome.Nautilus.desktop','org.gnome.DiskUtility.desktop']"
+gsettings set org.gnome.settings-daemon.plugins.power idle-dim false
+gsettings set org.gnome.desktop.session idle-delay 0
+gsettings set org.gnome.settings-daemon.plugins.power sleep-inactive-ac-timeout 0
+gsettings set org.gnome.settings-daemon.plugins.power sleep-inactive-battery-timeout 0
+gsettings set org.gnome.settings-daemon.plugins.power power-button-action 'interactive'

@@ -1,0 +1,14 @@
+#!/bin/bash
+readonly SLEEP4USER=5
+readonly WAIT4USER=5
+readonly LEN_OFF_POWERCYCLE=20 
+
+# Wait for user input with a timeout
+echo "Press Ctrl+C to interrupt or enter something within 10 seconds to continue."
+if read -t ${SLEEP4USER} -r userInput; then
+    echo "You entered: $userInput"
+else
+    echo "Timeout reached."
+    sleep  ${WAIT4USER}
+    sudo rtcwake -s ${LEN_OFF_POWERCYCLE} -m off 
+fi

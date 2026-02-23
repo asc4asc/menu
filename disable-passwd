@@ -1,0 +1,22 @@
+#!/bin/bash
+# Sperrt alle Benutzerkonten außer Root und einem definierten Benutzer
+# Nutzung: ./lock_users.sh [BENUTZERNAME]
+
+echo "[INFO] Sperre alle Benutzer"
+sudo passwd -l "root"
+
+for user in $(awk -F: '$3 >= 1000 {print $1}' /etc/passwd); do
+  sudo passwd -l "$user"
+done
+
+echo "Remote Login disablen?"
+# rm /home/${USER}/.ssh/authorized_keys
+
+if systemctl status ssh; then 
+  echo 'Warning ** SSH Server ** installed !'
+#  sudo systemctl stop ssh
+#  sudo systemctl disable ssh
+#  sudo apt remove --purge openssh-server
+fi
+
+echo "[INFO] Fertig. Gesperrte Benutzer können sich nicht mehr per Passwort anmelden."

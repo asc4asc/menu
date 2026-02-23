@@ -1,0 +1,9 @@
+#!/bin/bash
+
+filename=$(sudo dmidecode -s baseboard-product-name)
+echo ${filename} >>${HOME}/info/${filename} 
+sudo dmidecode -s baseboard-serial-number >>${HOME}/info/${filename} 
+sudo dmidecode -s bios-version >>${HOME}/info/${filename} 
+date +"%FT%T" >>${HOME}/info/${filename} 
+
+exit 0

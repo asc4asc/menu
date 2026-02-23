@@ -1,0 +1,5 @@
+#! /bin/bash
+
+mkdir -p todo
+cp 900-timeout-reboot todo/
+./todo/900-timeout-reboot

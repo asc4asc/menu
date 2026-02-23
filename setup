@@ -1,0 +1,16 @@
+#!/bin/bash
+#cd ../tmp/sudo4user && ./sudo4user.py -e
+#sudo apt install git 
+#cd ../tmp/sudo4user && ./setup
+#cd ../tmp/make-auto-login-console && ./setup 
+#sudo make-auto-login-console $USER
+if ! grep -q '# BEGIN menu is ready' $HOME/.bashrc ; then 
+  echo '# BEGIN menu is ready' >>$HOME/.bashrc
+  echo 'PATH=$PATH:"."' >>$HOME/.bashrc
+  echo 'if [ $(tty) == /dev/tty1 ] || [ $(tty) == /dev/pts/0 ]; then if [ -d "todo" ] && [ "$(ls -A todo)" ] ; then run-parts todo && cd menu ; else cd && cd menu && menu; fi; fi'>> $HOME/.bashrc 
+  echo '# END menu is ready' >>$HOME/.bashrc
+fi
+# tasksel ???
+#cd && cd menu && ./install-term-gui 
+#cd && cd menu && ./set-gnome-simple
+#cd && cd menu && ./set-gnome-flashback

@@ -1,0 +1,2 @@
+#!/bin/bash
+sudo dmesg |grep -Ei 'error|fail' || echo "No Problems!!"

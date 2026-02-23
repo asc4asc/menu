@@ -1,0 +1,28 @@
+---  
+- name: Grub modify  
+  hosts: all
+  become: true
+
+  tasks:
+    # --- GRUB: quiet/splash remove
+    - name: Ensure GRUB_CMDLINE_LINUX_DEFAULT exists without quiet/splash
+      ansible.builtin.lineinfile:
+        path: /etc/default/grub
+        regexp: '^GRUB_CMDLINE_LINUX_DEFAULT='
+        line: 'GRUB_CMDLINE_LINUX_DEFAULT=""'
+        create: true
+      notify: update grub
+    
+    - name: make a new timeout 
+      ansible.builtin.lineinfile:
+        path: /etc/default/grub
+        regexp: '^GRUB_TIMEOUT='
+        line: 'GRUB_TIMEOUT=1'
+        create: true
+      notify: update grub
+
+  handlers:
+    - name: update grub
+      command: update-grub
+      listen: update grub
+      become: true

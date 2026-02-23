@@ -1,0 +1,8 @@
+#!/bin/bash
+
+# Dann im Anmeldebildschirm per Zahnrad session auswaehlen. gnome-flashback (Metacity)
+# Automatisch?
+
+sudo apt -y install gnome-flashback
+echo -e "[User]\nXSession=gnome-flashback-metacity\nSystemAccount=false" > /tmp/$$TMP
+sudo cp /tmp/$$TMP /var/lib/AccountsService/users/${USER}

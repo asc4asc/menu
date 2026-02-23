@@ -1,0 +1,10 @@
+#!/bin/bash
+# Wait for user input with a timeout
+echo "Press Ctrl+C to interrupt or enter something within 10 seconds to continue."
+if read -t 10 -r userInput; then
+    echo "You entered: $userInput"
+else
+    echo "Timeout reached."
+    sleep 3
+    sudo reboot
+fi

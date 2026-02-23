@@ -1,0 +1,7 @@
+#! /bin/bash
+
+mkdir -p ../todo
+cp scripts4todo/900-timeout-powercycle ../todo/
+../todo/900-timeout-powercycle
+
+exit 0

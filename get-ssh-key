@@ -1,0 +1,32 @@
+#!/bin/bash
+
+# Liste der GitHub-Benutzer
+USERS=("asc4asc" "user2" "user3")
+
+SSH_DIR="$HOME/.ssh"
+AUTH_KEYS="$SSH_DIR/authorized_keys"
+
+# .ssh sicherstellen
+mkdir -p "$SSH_DIR"
+chmod 700 "$SSH_DIR"
+
+# Backup erstellen
+if [ -f "$AUTH_KEYS" ]; then
+    cp "$AUTH_KEYS" "$AUTH_KEYS.bak_$(date +%Y%m%d_%H%M%S)"
+fi
+
+# authorized_keys neu erzeugen
+> "$AUTH_KEYS"
+
+# Nutzer durchlaufen
+for USER in "${USERS[@]}"; do
+    echo "# GitHub keys for $USER" >> "$AUTH_KEYS"
+    curl -s "https://github.com/${USER}.keys" >> "$AUTH_KEYS"
+    echo -e "\n" >> "$AUTH_KEYS"
+done
+
+chmod 600 "$AUTH_KEYS"
+
+echo "Fertig! Github ssh Keys folgender Benutzer wurden in authorized_keys eingetragen:"
+printf '%s\n' "${USERS[@]}"
+``

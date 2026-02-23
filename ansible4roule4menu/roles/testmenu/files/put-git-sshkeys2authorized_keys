@@ -1,0 +1,3 @@
+#!/bin/bash
+echo "enable all ssh-host registert in git (user:asc4asc) to login into this host!" 
+curl https://github.com/asc4asc.keys >> .ssh/authorized_keys

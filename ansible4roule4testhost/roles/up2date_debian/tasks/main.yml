@@ -1,0 +1,43 @@
+# Update lists and upgrade packages.
+
+- name: Update apt package lists
+  ansible.builtin.apt:
+    update_cache: true
+    cache_valid_time: 86400
+  become: true
+
+- name: Upgrade packages
+  ansible.builtin.apt:
+    upgrade: dist
+    autoremove: true
+    autoclean: true
+  become: true
+
+- name: Install etckeeper
+  ansible.builtin.apt:
+    name: etckeeper
+    state: latest # noqa package-latest
+  become: true
+
+- name: Install extra packages from stable
+  ansible.builtin.apt:
+    name: "{{ extra_pkgs }}"
+    state: latest # noqa package-latest
+  become: true  
+  when: extra_pkgs|length
+
+- name: Add backports repository
+  ansible.builtin.apt_repository:
+    repo: deb http://deb.debian.org/debian/ {{ ansible_distribution_release }}-backports main non-free-firmware
+    state: present
+    update_cache: true
+  become: true  
+  when: extra_pkgs_bpo|length
+
+- name: Install extra packages from backports
+  ansible.builtin.apt:
+    name: "{{ extra_pkgs_bpo }}"
+    state: latest # noqa package-latest
+    default_release: "{{ ansible_distribution_release }}-backports"
+  become: true  
+  when: extra_pkgs_bpo|length

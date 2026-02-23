@@ -1,0 +1,16 @@
+#!/bin/bash
+
+# Define the test file and size
+TEST_FILE="/tmp/testfile"
+TEST_COUNT="1000"
+
+# Write test
+echo "Starting write test..."
+dd if=/dev/zero of=$TEST_FILE bs=1M count=$TEST_COUNT oflag=direct 
+
+# Read test
+echo "Starting read test..."
+dd if=$TEST_FILE of=/dev/null bs=1M count=$TEST_COUNT iflag=direct 
+
+# Clean up
+rm -f $TEST_FILE

@@ -1,0 +1,37 @@
+#!/bin/bash
+# Ein Setup auf eine oder mehrere Netzwerk Schnittstellen, diese werden still konfiguriert. 
+# Es soll nur vom Netz gelesen werden, keine Störung des abgehörten Netzes.    
+#
+# Es muss noch entschieden werden ob es nach reboot wieder normal sein soll oder es dauerhaft so konfiguriert bleiben. 
+#
+echo "Bitte erst noch bearbeiten!"
+echo "Achtung passt noch nicht so ganz, bleibt nicht ueber neustart gesetzt ...." 
+echo "Wireshark muss schon passend installiert sein!" 
+exit 1
+
+sudo apt install wireshark
+sudo usermod -aG wireshark $USER 
+
+# Schnittstelle definieren
+# IFACE="eth0"
+IFACE="enp4s0"
+
+echo "[*] Deaktiviere IPv4 und IPv6..."
+ip addr flush dev $IFACE
+
+echo "[*] Flushe ARP-Cache..."
+ip neigh flush all
+
+sysctl -w net.ipv6.conf.$IFACE.disable_ipv6=1
+
+echo "[*] Setze $IFACE in Promiscuous Mode..."
+ip link set $IFACE promisc on
+ip link set $IFACE up
+
+echo "[*] NetworkManager ignoriert Interface..."
+nmcli dev set $IFACE managed no
+
+echo "[*] Starte Wireshark..."
+# sudo apt install wireshark
+# sudo usermod -aG wireshark $USER 
+wireshark -i $IFACE -k

@@ -1,0 +1,153 @@
+---
+- name: Gnome 
+  hosts: all
+  become: true
+  pre_tasks:
+    - name: Ermittele $USER aus der Remote-Umgebung ohne become
+      become: false
+      ansible.builtin.set_fact:
+        _remote_user: "{{ ansible_env.USER | default('') }}"
+
+    - name: Fallback auf ekf, wenn _remote_user leer oder root ist
+      ansible.builtin.set_fact:
+        target_user: "{{ (_remote_user | length == 0 or _remote_user == 'root') | ternary('ekf', _remote_user) }}"
+
+    - name: Lege Benutzer ekf an, wenn benötigt
+      when: target_user == 'ekf'
+      block:
+        - name: Stelle sicher, dass Gruppe ekf existiert
+          ansible.builtin.group:
+            name: ekf
+            state: present
+
+        - name: Stelle sicher, dass Benutzer ekf existiert
+          ansible.builtin.user:
+            name: ekf
+            group: ekf
+            shell: /bin/bash
+            create_home: true
+            state: present
+            # optional: zu sudo hinzufügen, falls gewünscht
+            # groups: sudo
+            # append: true
+
+    - name: Hole Home-Verzeichnis des target_user via getent
+      ansible.builtin.getent:
+        database: passwd
+        key: "{{ target_user }}"
+
+    - name: Setze Pfad-Fakten für target_user
+      ansible.builtin.set_fact:
+        target_user_home: "/home/{{ target_user }}"
+        autostart_dir: "/home/{{ target_user }}/.config/autostart"
+        desktop_dir: "/home/{{ target_user }}/Desktop"
+  vars:
+    packages:
+      - gnome-session-flashback
+      - gnome-panel
+      - gnome-applets
+      - gnome-flashback
+      - gnome-terminal
+      - nautilus
+      - gedit
+      - firefox-esr
+      - gnome-disk-utility
+      - gdm3
+
+  tasks:
+    - name: Install GNOME Classic / Flashback Pakete
+      ansible.builtin.apt:
+        name: "{{ packages }}"
+        state: present
+        update_cache: true
+
+    # --- Verzeichnisse für Zielbenutzer ---
+    - name: Create autostart directory
+      ansible.builtin.file:
+        path: "{{ autostart_dir }}"
+        state: directory
+        owner: "{{ target_user }}"
+        group: "{{ target_user }}"
+        mode: '0755'
+
+    - name: Create Desktop directory
+      ansible.builtin.file:
+        path: "{{ desktop_dir }}"
+        state: directory
+        owner: "{{ target_user }}"
+        group: "{{ target_user }}"
+        mode: '0755'
+
+    # --- Autostart GNOME Terminal ---
+    - name: Deploy GNOME Terminal autostart desktop file
+      ansible.builtin.copy:
+        dest: "{{ autostart_dir }}/term.desktop"
+        owner: "{{ target_user }}"
+        group: "{{ target_user }}"
+        mode: '0644'
+        content: |
+          [Desktop Entry]
+          Type=Application
+          Name=GNOME Terminal
+          Exec=gnome-terminal
+          OnlyShowIn=GNOME;GNOME-Flashback;
+          X-GNOME-Autostart-enabled=true
+
+    # --- Desktop Shortcuts ---
+    - name: Deploy GNOME Terminal desktop file on Desktop
+      ansible.builtin.copy:
+        dest: "{{ desktop_dir }}/gnome-terminal.desktop"
+        owner: "{{ target_user }}"
+        group: "{{ target_user }}"
+        mode: '0644'
+        content: |
+          [Desktop Entry]
+          Version=1.0
+          Name=GNOME Terminal
+          Comment=Open the GNOME Terminal
+          Exec=gnome-terminal
+          Icon=utilities-terminal
+          Terminal=false
+          Type=Application
+          Categories=System;TerminalEmulator;
+
+    - name: Deploy GNOME Disks desktop file on Desktop
+      ansible.builtin.copy:
+        dest: "{{ desktop_dir }}/gnome-DiskUtility.desktop"
+        owner: "{{ target_user }}"
+        group: "{{ target_user }}"
+        mode: '0644'
+        content: |
+          [Desktop Entry]
+          Version=1.0
+          Name=GNOME Disks
+          Comment=Open GNOME Disks Utility
+          Exec=gnome-disks
+          Icon=org.gnome.DiskUtility
+          Terminal=false
+          Type=Application
+          Categories=GNOME;GTK;Utility;X-GNOME-Utilities;
+
+    # --- GDM Autologin in [daemon]-Section ---
+    - name: Configure GDM autologin in daemon.conf
+      ansible.builtin.blockinfile:
+        path: /etc/gdm3/daemon.conf
+        marker: "# {mark} ANSIBLE MANAGED AUTOLOGIN"
+        block: |
+          [daemon]
+          AutomaticLoginEnable=True
+          AutomaticLogin={{ target_user }}
+      notify: restart gdm3
+
+    # --- gnome-initial-setup entfernen ---
+    - name: Ensure gnome-initial-setup is removed
+      ansible.builtin.apt:
+        name: gnome-initial-setup
+        state: absent
+
+  handlers:
+    - name: restart gdm3
+      become: true
+      ansible.builtin.service:
+        name: gdm3
+        state: restarted

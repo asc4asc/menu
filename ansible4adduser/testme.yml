@@ -1,0 +1,39 @@
+---
+# This playbook show user 
+
+- name: 
+  hosts: all
+#  become: true
+#  gather_facts: true
+
+  tasks:
+    - name: Save local user
+      set_fact:
+        local_user: "{{ lookup('env','USER') }}"
+
+    - name: Benutzer anzeigen 
+      debug:
+        msg: "{{ lookup('env','USER') }}"
+    - name: Benutzer anzeigen 
+      debug:
+        msg: "{{ ansible_env.USER }}"
+    - name: Benutzer anzeigen 
+      debug:
+        msg: "{{ local_user }}"
+
+    - name: Prüfe, ob der blockinfile-Marker bereits existiert
+      ansible.builtin.command: >
+        grep -Fq '# BEGIN ANSIBLE MANAGED BLOCK myapp' config.conf
+      register: marker_check
+      failed_when: false     # grep mit RC=1 ist "nicht gefunden", kein Fehler
+      changed_when: false
+
+    - name: Füge Block nur ein, wenn Marker fehlt
+      ansible.builtin.blockinfile:
+        path: config.conf
+        marker: "# {mark} menu is ready"
+        block: |
+          [myapp]
+          option_a = 1
+          option_b = off
+#      when: marker_check.rc != 0   # 0: gefunden → überspringen; 1: fehlt → einsetzen

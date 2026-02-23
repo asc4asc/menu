@@ -1,0 +1,29 @@
+#!/bin/bash 
+echo " Use as info file for cmds. Automatic comes later."
+# cat $0
+# exit 1
+
+# Install Debian from Ventoy Stick with preseed file. 
+# tasksel Grafische Oberflaeche.
+# cd
+# copy keys
+# cp ssh_readonly_key/* .ssh
+# check correct permissions only rw for user. 
+# chmod a-rwx id_rsa* && chmod u+rw id_rsa*
+# cd && unzip /media/${user}/Ventoy/keys.zip 
+
+# For work with git take a new copy from git. Remove menu-master?
+cd && git clone git@gitlab.ekf.com:asc/menu.git
+
+# clone temp and install 
+cd && mkdir -p tmp
+cd && cd tmp && git clone git@gitlab.ekf.com:asc/sudo4user.git
+cd && cd tmp/sudo4user && ./setup # set up client
+cd && cd tmp && git clone git@gitlab.ekf.com:asc/make-auto-login-console.git
+cd && cd tmp/make-auto-login-console && ./setup # set up client
+#cd && cd tmp && git clone git@gitlab.ekf.com:asc/uefi-stick.git
+#sudo cp -r /home/$USER/tmp/uefi-stick/* /boot/efi 
+
+#cd && cd menu && ./setup
+
+# Automatic login per GUI einrichten setup -> System -> User -> Automatic Login

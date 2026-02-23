@@ -1,17 +1,7 @@
-This is a help text for the Menu in this Path.
-
-*** Test menu ***
-h) Dieses Helpfile
-p) powercycle 
+---------------------------------------------------
+p) poweroff 
 r) reboot
-s) shutdown/poweroff
-doit) alle schrite in todo ausführen.
-
-con) break and goto console tty1
-con.enable) Enable das Umschalten auf die console tty1 / automatischer reboot
-
-startx) start gnome with terminal
-gui.enable) Umschalten auf start gnome with terminal / automatischer reboot
-
-install.menu) Install auto menu start in .bashrc
-install-term-gui) Install a gnome-term das automatisch startet beim login. 
+m) call Menu
+stress-test) Simple script to make CPU stress.
+Please use start-reboot or start-powercycle to start a endless test. 
+---------------------------------------------------

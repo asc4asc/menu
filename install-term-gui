@@ -7,9 +7,7 @@ usage: ${0##*/}
 
     -h                  Print this help message
 
-Create a live linux image.
-If possible it starts a test with kvm
-with calamaris ..... 
+Install a autostart gnome-term.
 EOF
 }
 
@@ -43,10 +41,7 @@ X-GNOME-Autostart-Delay=0
 EOF
 return 0
 }
-mkdir $HOME/.config/autostart
+mkdir -p $HOME/.config/autostart
 cat-autostart-entry4gnome
 
 exit 0
-
-
-
