@@ -1,5 +1,0 @@
-#!/bin/bash
-echo $0 test me
-mv $0 ./done
-sleep 5
-# sudo reboot
