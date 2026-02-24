@@ -25,6 +25,7 @@
     group: "{{ local_user }}"
   with_items:
     - check4hardware-change
+    - bios-info.bash
     - p
     - r
     - start-reboot
