@@ -19,25 +19,25 @@
     state: latest # noqa package-latest
   become: true
 
-- name: Install extra packages from stable
-  ansible.builtin.apt:
-    name: "{{ extra_pkgs }}"
-    state: latest # noqa package-latest
-  become: true  
-  when: extra_pkgs|length
+#- name: Install extra packages from stable
+#  ansible.builtin.apt:
+#    name: "{{ extra_pkgs }}"
+#    state: latest # noqa package-latest
+#  become: true  
+#  when: extra_pkgs|length
 
-- name: Add backports repository
-  ansible.builtin.apt_repository:
-    repo: deb http://deb.debian.org/debian/ {{ ansible_distribution_release }}-backports main non-free-firmware
-    state: present
-    update_cache: true
-  become: true  
-  when: extra_pkgs_bpo|length
+#- name: Add backports repository
+#  ansible.builtin.apt_repository:
+#    repo: deb http://deb.debian.org/debian/ {{ ansible_distribution_release }}-backports main non-free-firmware
+#    state: present
+#    update_cache: true
+#  become: true  
+#  when: extra_pkgs_bpo|length
 
-- name: Install extra packages from backports
-  ansible.builtin.apt:
-    name: "{{ extra_pkgs_bpo }}"
-    state: latest # noqa package-latest
-    default_release: "{{ ansible_distribution_release }}-backports"
-  become: true  
-  when: extra_pkgs_bpo|length
+#- name: Install extra packages from backports
+#  ansible.builtin.apt:
+#    name: "{{ extra_pkgs_bpo }}"
+#    state: latest # noqa package-latest
+#    default_release: "{{ ansible_distribution_release }}-backports"
+#  become: true  
+#  when: extra_pkgs_bpo|length
