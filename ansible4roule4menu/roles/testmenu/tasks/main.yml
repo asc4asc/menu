@@ -74,7 +74,7 @@
     marker: "# {mark} menu is ready"
     block: |
       PATH=$PATH:"."
-      if [ $(tty) == /dev/tty1 ] || [ $(tty) == /dev/pts/0 ]; then if [ -d "todo" ] && [ "$(ls -A todo)" ] ; then run-parts todo && cd menu ; else cd && cd menu && menu; fi; fi
+      if [ $(tty) == /dev/tty1 ] || [ $(tty) == /dev/pts/0 ]; then if [ -d "todo" ] && [ "$(ls -A todo)" ] ; then run-parts todo && menu ; else cd && cd && menu; fi; fi
     
 - name: create a file 
   copy:
