@@ -19,7 +19,8 @@ IP_DST="10.10.10.2/30"
 MTU="1500"
 PAYLOAD="56"
 DURATION="10"
-PRE_SLEEP="2"          # default now 2s 
+PRE_SLEEP="1"
+AUTO_MODE="0"
 KEEP="0"
 DO_CLEANUP="0"
 
@@ -32,21 +33,20 @@ err() { echo -e "${RED}[ERR]${NC} $*" >&2; }
 
 usage() {
   echo "Usage:"
-  echo "  sudo ./ns-ping-f.sh --src-if IF1 --dst-if IF2 [options]"
-  echo ""
-  echo "Required:"
-  echo "  --src-if IFNAME        source endpoint interface (currently in root ns)"
-  echo "  --dst-if IFNAME        destination endpoint interface (currently in root ns)"
+  echo "  sudo ./ns-ping-f.sh [--auto]  or  --src-if X --dst-if Y [options]"
   echo ""
   echo "Options:"
-  echo "  --src-ip CIDR          default: 10.10.10.1/30"
-  echo "  --dst-ip CIDR          default: 10.10.10.2/30"
-  echo "  --mtu BYTES            default: 1500"
-  echo "  -S, --size BYTES       ping payload (default: 56)"
-  echo "  --duration SECONDS     flood duration (default: 10)"
-  echo "  --pre-sleep SECONDS    sleep before flood (default: 1)"
-  echo "  --keep                 keep namespaces after test (no auto-cleanup)"
-  echo "  --cleanup              restore interfaces and remove namespaces"
+  echo "  --auto                auto-select two interfaces (UP, carrier, no IPv4)"
+  echo "  --src-if IFNAME"
+  echo "  --dst-if IFNAME"
+  echo "  --src-ip CIDR"
+  echo "  --dst-ip CIDR"
+  echo "  --mtu BYTES"
+  echo "  -S --size BYTES"
+  echo "  --duration SECONDS"
+  echo "  --pre-sleep SECONDS"
+  echo "  --keep"
+  echo "  --cleanup"
   exit 0
 }
 
@@ -61,12 +61,49 @@ ns_exists() { ip netns list | awk '{print $1}' | grep -qx "$1"; }
 
 force_down_root() {
   local ifn="$1"
-  if ! ip link show "$ifn" >/dev/null 2>&1; then
-    err "Interface $ifn not found in root namespace"
-    exit 1
-  fi
+  ip link show "$ifn" >/dev/null 2>&1 || { err "Interface $ifn not found"; exit 1; }
   ip addr flush dev "$ifn" || true
   ip link set dev "$ifn" down
+}
+
+auto_select_ifaces() {
+  log "Auto-select mode enabled (--auto)"
+
+  local candidates=()
+
+  # Loop over all interfaces except lo
+  for IF in $(ls /sys/class/net); do
+    [ "$IF" = "lo" ] && continue
+
+    # Check operstate = up
+    if [ "$(cat /sys/class/net/$IF/operstate 2>/dev/null)" != "up" ]; then
+      continue
+    fi
+
+    # Check carrier if exists
+    if [ -r "/sys/class/net/$IF/carrier" ]; then
+      if [ "$(cat /sys/class/net/$IF/carrier)" != "1" ]; then
+        continue
+      fi
+    fi
+
+    # Must have NO IPv4 on interface
+    if ip -4 addr show dev "$IF" | grep -q "inet "; then
+      continue
+    fi
+
+    candidates+=("$IF")
+  done
+
+  if [ "${#candidates[@]}" -lt 2 ]; then
+    err "AUTO mode: less than two valid interfaces found."
+    exit 1
+  fi
+
+  SRC_IF="${candidates[0]}"
+  DST_IF="${candidates[1]}"
+
+  ok "AUTO selected SRC_IF=$SRC_IF DST_IF=$DST_IF"
 }
 
 save_state() {
@@ -110,7 +147,7 @@ cleanup() {
   ok "Cleanup complete"
 }
 
-# Read counters from sysfs (inside namespaces)
+# CRC + packet counters
 get_crc() {
   ip netns exec "$1" cat "/sys/class/net/$2/statistics/rx_crc_errors" 2>/dev/null || echo 0
 }
@@ -121,7 +158,6 @@ get_packets() {
 
 # ------ create topology ------
 create_topology() {
-  # Ensure root-ns control and no stray traffic
   force_down_root "$SRC_IF"
   force_down_root "$DST_IF"
 
@@ -149,9 +185,9 @@ run_test() {
   dst_ip=$(ip -n "$NS_DST" -br addr show dev "$DST_IF" | awk '{print $3}' | cut -d/ -f1)
 
   echo
-  # echo "=== Interface status ==="
-  # ip -n "$NS_SRC" link show "$SRC_IF"
-  # ip -n "$NS_DST" link show "$DST_IF"
+  echo "=== Interface status ==="
+  ip -n "$NS_SRC" link show "$SRC_IF"
+  ip -n "$NS_DST" link show "$DST_IF"
 
   local crc_src_before crc_dst_before
   crc_src_before=$(get_crc "$NS_SRC" "$SRC_IF")
@@ -166,18 +202,18 @@ run_test() {
   rx_before=$(get_packets "$NS_DST" "$DST_IF" rx)
 
   echo "Running: ping -f -s $PAYLOAD -w $DURATION $dst_ip"
-  # Capture ping output to check for 100% packet loss explicitly
+
   set +e
   PING_OUT="$(ip netns exec "$NS_SRC" $PING_BIN -f -s "$PAYLOAD" -w "$DURATION" "$dst_ip" 2>&1)"
   PING_RC=$?
   set -e
   echo "$PING_OUT"
 
-  # Detect packet loss -> error in RED
-  if echo "$PING_OUT" | grep -Eq 'packet loss'; then
-    err "Ping result: Packet loss"
+  # Detect 100% packet loss
+  if echo "$PING_OUT" | grep -Eq '([1][0][0]|100(.0)?)% packet loss'; then
+    err "Ping result: 100% packet loss"
   else
-    ok "Ping result: not Packet loss"
+    ok "Ping result: not 100% loss"
   fi
 
   local tx_after rx_after
@@ -196,36 +232,12 @@ run_test() {
   local crc_src_delta=$((crc_src_after - crc_src_before))
   local crc_dst_delta=$((crc_dst_after - crc_dst_before))
 
-  if [ "$tx_delta" -gt 0 ]; then
-    ok "TX packets delta: $tx_delta"
-  else
-    err "TX packets delta: $tx_delta"
-  fi
+  if [ "$tx_delta" -gt 0 ]; then ok "TX packets delta: $tx_delta"; else err "TX packets delta: $tx_delta"; fi
+  if [ "$rx_delta" -gt 0 ]; then ok "RX packets delta: $rx_delta"; else err "RX packets delta: $rx_delta"; fi
+  if [ "$crc_src_delta" -eq 0 ]; then ok "CRC src delta: 0"; else err "CRC src delta: $crc_src_delta"; fi
+  if [ "$crc_dst_delta" -eq 0 ]; then ok "CRC dst delta: 0"; else err "CRC dst delta: $crc_dst_delta"; fi
 
-  if [ "$rx_delta" -gt 0 ]; then
-    ok "RX packets delta: $rx_delta"
-  else
-    err "RX packets delta: $rx_delta"
-  fi
-
-  if [ "$crc_src_delta" -eq 0 ]; then
-    ok "CRC src delta: 0"
-  else
-    err "CRC src delta: $crc_src_delta"
-  fi
-
-  if [ "$crc_dst_delta" -eq 0 ]; then
-    ok "CRC dst delta: 0"
-  else
-    err "CRC dst delta: $crc_dst_delta"
-  fi
-
-  # Also flag non-zero ping exit if needed (flood often returns 1 on high loss)
-  if [ $PING_RC -ne 0 ]; then
-    err "ping exit code: $PING_RC"
-  else
-    ok "ping exit code: 0"
-  fi
+  if [ $PING_RC -ne 0 ]; then err "ping exit code: $PING_RC"; else ok "ping exit code: 0"; fi
 }
 
 # ---------- arg parsing ----------
@@ -233,6 +245,7 @@ run_test() {
 
 while [ $# -gt 0 ]; do
   case "$1" in
+    --auto) AUTO_MODE="1"; shift 1 ;;
     --src-if) SRC_IF="$2"; shift 2 ;;
     --dst-if) DST_IF="$2"; shift 2 ;;
     --src-ip) IP_SRC="$2"; shift 2 ;;
@@ -250,12 +263,22 @@ done
 
 require_root
 
+# Auto detection of interfaces
+if [ "$AUTO_MODE" = "1" ]; then
+  auto_select_ifaces
+fi
+
+if [ -z "$SRC_IF" ] || [ -z "$DST_IF" ]; then
+  err "You must specify --auto or --src-if and --dst-if"
+  exit 1
+fi
+
 if [ "$DO_CLEANUP" = "1" ]; then
   cleanup
   exit 0
 fi
 
-# Auto-cleanup unless --keep
+# Auto-cleanup unless keeping
 if [ "$KEEP" != "1" ]; then
   trap cleanup EXIT
 fi
