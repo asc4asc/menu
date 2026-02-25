@@ -57,7 +57,7 @@ require_root() {
   if [ "$(id -u)" -ne 0 ]; then
     err "Run as root"
     exit 1
-  }
+  fi
 }
 
 ns_exists() { ip netns list | awk '{print $1}' | grep -qx "$1"; }
