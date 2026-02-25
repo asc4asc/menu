@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# ANSI colors
+RED="\033[0;31m"
+GRN="\033[0;32m"
+YLW="\033[1;33m"
+NC="\033[0m"
+
 NS_SRC="src"
 NS_DST="dst"
 
@@ -13,14 +19,16 @@ IP_DST="10.10.10.2/30"
 MTU="1500"
 PAYLOAD="56"
 DURATION="10"
+PRE_SLEEP="3"
 KEEP="0"
 DO_CLEANUP="0"
 
 STATE_FILE="/tmp/ns-ping-f.state"
 PING_BIN="${PING_BIN:-ping}"
 
-log() { echo "[*] $*"; }
-err() { echo "[!] $*" >&2; }
+log() { echo -e "[*] $*"; }
+ok()  { echo -e "${GRN}[OK]${NC} $*"; }
+err() { echo -e "${RED}[ERR]${NC} $*" >&2; }
 
 usage() {
   echo "Usage:"
@@ -31,19 +39,28 @@ usage() {
   echo "  --dst-ip CIDR"
   echo "  --mtu BYTES"
   echo "  -S --size BYTES"
-  echo "  --duration SECONDS      (default: 10)"
-  echo "  --keep                  keep namespaces after test"
-  echo "  --cleanup               restore interfaces"
+  echo "  --duration SECONDS"
+  echo "  --pre-sleep SECONDS     (default: 3)"
+  echo "  --keep"
+  echo "  --cleanup"
   exit 0
 }
 
-require_root() { [ "$(id -u)" -eq 0 ] || { err "Run as root"; exit 1; }; }
+require_root() {
+  if [ "$(id -u)" -ne 0 ]; then
+    err "Run as root"
+    exit 1
+  fi
+}
 
 ns_exists() { ip netns list | awk '{print $1}' | grep -qx "$1"; }
 
 force_down_root() {
   local ifn="$1"
-  ip link show "$ifn" >/dev/null 2>&1 || { err "Interface $ifn not found in root namespace"; exit 1; }
+  if ! ip link show "$ifn" >/dev/null 2>&1; then
+    err "Interface $ifn not found in root namespace"
+    exit 1
+  fi
   ip addr flush dev "$ifn" || true
   ip link set dev "$ifn" down
 }
@@ -56,7 +73,10 @@ save_state() {
 }
 
 load_state() {
-  [ -f "$STATE_FILE" ] || { err "No state file"; exit 1; }
+  if [ ! -f "$STATE_FILE" ]; then
+    err "No state file"
+    exit 1
+  fi
   # shellcheck disable=SC1090
   . "$STATE_FILE"
 }
@@ -83,7 +103,7 @@ cleanup() {
 
   rm -f "$STATE_FILE" || true
 
-  log "Cleanup complete"
+  ok "Cleanup complete"
 }
 
 get_crc() {
@@ -115,6 +135,7 @@ create_topology() {
   ip -n "$NS_DST" addr add "$IP_DST" dev "$DST_IF"
 
   save_state
+  ok "Namespaces + interfaces ready"
 }
 
 run_test() {
@@ -131,7 +152,8 @@ run_test() {
   crc_dst_before=$(get_crc "$NS_DST" "$DST_IF")
 
   echo
-  read -r -p "Press ENTER to start ping flood for ${DURATION}s..."
+  echo -e "${YLW}Sleeping ${PRE_SLEEP}s before flood...${NC}"
+  sleep "$PRE_SLEEP"
 
   local tx_before rx_before
   tx_before=$(get_packets "$NS_SRC" "$SRC_IF" tx)
@@ -150,10 +172,30 @@ run_test() {
 
   echo
   echo "=== RESULTS ==="
-  echo "TX packets delta: $((tx_after - tx_before))"
-  echo "RX packets delta: $((rx_after - rx_before))"
-  echo "CRC src delta:    $((crc_src_after - crc_src_before))"
-  echo "CRC dst delta:    $((crc_dst_after - crc_dst_before))"
+
+  if [ $((tx_after - tx_before)) -gt 0 ]; then
+    ok "TX packets delta: $((tx_after - tx_before))"
+  else
+    err "TX packets delta: $((tx_after - tx_before))"
+  fi
+
+  if [ $((rx_after - rx_before)) -gt 0 ]; then
+    ok "RX packets delta: $((rx_after - rx_before))"
+  else
+    err "RX packets delta: $((rx_after - rx_before))"
+  fi
+
+  if [ $((crc_src_after - crc_src_before)) -eq 0 ]; then
+    ok "CRC src delta: 0"
+  else
+    err "CRC src delta: $((crc_src_after - crc_src_before))"
+  fi
+
+  if [ $((crc_dst_after - crc_dst_before)) -eq 0 ]; then
+    ok "CRC dst delta: 0"
+  else
+    err "CRC dst delta: $((crc_dst_after - crc_dst_before))"
+  fi
 }
 
 # ---------- arg parsing ----------
@@ -168,10 +210,11 @@ while [ $# -gt 0 ]; do
     --mtu) MTU="$2"; shift 2 ;;
     -S|--size) PAYLOAD="$2"; shift 2 ;;
     --duration) DURATION="$2"; shift 2 ;;
+    --pre-sleep) PRE_SLEEP="$2"; shift 2 ;;
     --keep) KEEP="1"; shift 1 ;;
     --cleanup) DO_CLEANUP="1"; shift 1 ;;
     -h|--help|-\?) usage ;;
-    *) err "Unknown: $1"; usage ;;
+    *) err "Unknown option: $1"; usage ;;
   esac
 done
 
