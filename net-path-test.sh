@@ -19,7 +19,7 @@ IP_DST="10.10.10.2/30"
 MTU="1500"
 PAYLOAD="56"
 DURATION="10"
-PRE_SLEEP="3"
+PRE_SLEEP="1"          # default now 1s as requested
 KEEP="0"
 DO_CLEANUP="0"
 
@@ -34,15 +34,19 @@ usage() {
   echo "Usage:"
   echo "  sudo ./ns-ping-f.sh --src-if IF1 --dst-if IF2 [options]"
   echo ""
+  echo "Required:"
+  echo "  --src-if IFNAME        source endpoint interface (currently in root ns)"
+  echo "  --dst-if IFNAME        destination endpoint interface (currently in root ns)"
+  echo ""
   echo "Options:"
-  echo "  --src-ip CIDR"
-  echo "  --dst-ip CIDR"
-  echo "  --mtu BYTES"
-  echo "  -S --size BYTES"
-  echo "  --duration SECONDS"
-  echo "  --pre-sleep SECONDS     (default: 3)"
-  echo "  --keep"
-  echo "  --cleanup"
+  echo "  --src-ip CIDR          default: 10.10.10.1/30"
+  echo "  --dst-ip CIDR          default: 10.10.10.2/30"
+  echo "  --mtu BYTES            default: 1500"
+  echo "  -S, --size BYTES       ping payload (default: 56)"
+  echo "  --duration SECONDS     flood duration (default: 10)"
+  echo "  --pre-sleep SECONDS    sleep before flood (default: 1)"
+  echo "  --keep                 keep namespaces after test (no auto-cleanup)"
+  echo "  --cleanup              restore interfaces and remove namespaces"
   exit 0
 }
 
@@ -106,6 +110,7 @@ cleanup() {
   ok "Cleanup complete"
 }
 
+# Read counters from sysfs (inside namespaces)
 get_crc() {
   ip netns exec "$1" cat "/sys/class/net/$2/statistics/rx_crc_errors" 2>/dev/null || echo 0
 }
@@ -116,6 +121,7 @@ get_packets() {
 
 # ------ create topology ------
 create_topology() {
+  # Ensure root-ns control and no stray traffic
   force_down_root "$SRC_IF"
   force_down_root "$DST_IF"
 
@@ -160,7 +166,19 @@ run_test() {
   rx_before=$(get_packets "$NS_DST" "$DST_IF" rx)
 
   echo "Running: ping -f -s $PAYLOAD -w $DURATION $dst_ip"
-  ip netns exec "$NS_SRC" $PING_BIN -f -s "$PAYLOAD" -w "$DURATION" "$dst_ip"
+  # Capture ping output to check for 100% packet loss explicitly
+  set +e
+  PING_OUT="$(ip netns exec "$NS_SRC" $PING_BIN -f -s "$PAYLOAD" -w "$DURATION" "$dst_ip" 2>&1)"
+  PING_RC=$?
+  set -e
+  echo "$PING_OUT"
+
+  # Detect 100% packet loss -> error in RED
+  if echo "$PING_OUT" | grep -Eq '([1][0][0]|100(.0)?)% packet loss'; then
+    err "Ping result: 100% packet loss"
+  else
+    ok "Ping result: not 100% loss"
+  fi
 
   local tx_after rx_after
   tx_after=$(get_packets "$NS_SRC" "$SRC_IF" tx)
@@ -173,28 +191,40 @@ run_test() {
   echo
   echo "=== RESULTS ==="
 
-  if [ $((tx_after - tx_before)) -gt 0 ]; then
-    ok "TX packets delta: $((tx_after - tx_before))"
+  local tx_delta=$((tx_after - tx_before))
+  local rx_delta=$((rx_after - rx_before))
+  local crc_src_delta=$((crc_src_after - crc_src_before))
+  local crc_dst_delta=$((crc_dst_after - crc_dst_before))
+
+  if [ "$tx_delta" -gt 0 ]; then
+    ok "TX packets delta: $tx_delta"
   else
-    err "TX packets delta: $((tx_after - tx_before))"
+    err "TX packets delta: $tx_delta"
   fi
 
-  if [ $((rx_after - rx_before)) -gt 0 ]; then
-    ok "RX packets delta: $((rx_after - rx_before))"
+  if [ "$rx_delta" -gt 0 ]; then
+    ok "RX packets delta: $rx_delta"
   else
-    err "RX packets delta: $((rx_after - rx_before))"
+    err "RX packets delta: $rx_delta"
   fi
 
-  if [ $((crc_src_after - crc_src_before)) -eq 0 ]; then
+  if [ "$crc_src_delta" -eq 0 ]; then
     ok "CRC src delta: 0"
   else
-    err "CRC src delta: $((crc_src_after - crc_src_before))"
+    err "CRC src delta: $crc_src_delta"
   fi
 
-  if [ $((crc_dst_after - crc_dst_before)) -eq 0 ]; then
+  if [ "$crc_dst_delta" -eq 0 ]; then
     ok "CRC dst delta: 0"
   else
-    err "CRC dst delta: $((crc_dst_after - crc_dst_before))"
+    err "CRC dst delta: $crc_dst_delta"
+  fi
+
+  # Also flag non-zero ping exit if needed (flood often returns 1 on high loss)
+  if [ $PING_RC -ne 0 ]; then
+    err "ping exit code: $PING_RC"
+  else
+    ok "ping exit code: 0"
   fi
 }
 
@@ -225,6 +255,7 @@ if [ "$DO_CLEANUP" = "1" ]; then
   exit 0
 fi
 
+# Auto-cleanup unless --keep
 if [ "$KEEP" != "1" ]; then
   trap cleanup EXIT
 fi
@@ -235,3 +266,4 @@ run_test
 if [ "$KEEP" = "1" ]; then
   log "Namespaces kept. Run --cleanup manually."
 fi
+
