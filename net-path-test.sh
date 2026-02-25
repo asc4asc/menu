@@ -19,7 +19,7 @@ IP_DST="10.10.10.2/30"
 MTU="1500"
 PAYLOAD="56"
 DURATION="10"
-PRE_SLEEP="1"          # default now 1s as requested
+PRE_SLEEP="2"          # default now 2s 
 KEEP="0"
 DO_CLEANUP="0"
 
@@ -149,9 +149,9 @@ run_test() {
   dst_ip=$(ip -n "$NS_DST" -br addr show dev "$DST_IF" | awk '{print $3}' | cut -d/ -f1)
 
   echo
-  echo "=== Interface status ==="
-  ip -n "$NS_SRC" link show "$SRC_IF"
-  ip -n "$NS_DST" link show "$DST_IF"
+  # echo "=== Interface status ==="
+  # ip -n "$NS_SRC" link show "$SRC_IF"
+  # ip -n "$NS_DST" link show "$DST_IF"
 
   local crc_src_before crc_dst_before
   crc_src_before=$(get_crc "$NS_SRC" "$SRC_IF")
