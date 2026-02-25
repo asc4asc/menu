@@ -173,11 +173,11 @@ run_test() {
   set -e
   echo "$PING_OUT"
 
-  # Detect 100% packet loss -> error in RED
-  if echo "$PING_OUT" | grep -Eq '([1][0][0]|100(.0)?)% packet loss'; then
-    err "Ping result: 100% packet loss"
+  # Detect packet loss -> error in RED
+  if echo "$PING_OUT" | grep -Eq 'packet loss'; then
+    err "Ping result: Packet loss"
   else
-    ok "Ping result: not 100% loss"
+    ok "Ping result: not Packet loss"
   fi
 
   local tx_after rx_after
