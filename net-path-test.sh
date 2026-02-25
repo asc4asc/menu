@@ -1,88 +1,80 @@
 #!/usr/bin/env bash
-# ns-ext-path-test.sh
-# Purpose: Test a real/external path using two selected interfaces, without any bridges or veth.
-#          Each interface is moved to its own netns (src, dst). Tests run only inside namespaces.
+# ns-ping-f-test.sh
+# Minimal external path test with ping -f between two selected interfaces.
+# No bridges, no veth. Exactly your external segment gets tested.
 #
-# Example external path:
-#   [src-ns: <src-if> ] ----(your real external path: cable/switch/media)---- [dst-ns: <dst-if>]
+# Actions:
+#   - Move --src-if into namespace 'src' and --dst-if into 'dst'
+#   - Assign IPs, set MTU, bring links up
+#   - Verify link state (operstate/carrier). If down -> abort with clear message
+#   - Run ping -f from src to dst
+#   - Cleanup: move interfaces back to root ns, delete namespaces
 #
-# Notes:
-# - You MUST provide --src-if and --dst-if (they must exist in the root namespace and be DOWN).
-# - The script assigns IPs on those interfaces inside their namespaces and runs tests.
-# - No bridge, no veth are created. Your external infrastructure provides L2/L3 connectivity.
-# - Root privileges required.
+# Requirements: bash, iproute2 (ip), ping, root privileges
+# Traffic policy: All test traffic runs inside namespaces (no root-ns traffic)
 
 set -euo pipefail
 
-# ---------- Defaults ----------
+# -------- Defaults --------
 NS_SRC="src"
 NS_DST="dst"
 
 SRC_IF=""
 DST_IF=""
 
-IP_SRC="10.10.10.1/30"   # use a /30 or /31 for point-to-point
+IP_SRC="10.10.10.1/30"    # choose /30 or /31 for point-to-point
 IP_DST="10.10.10.2/30"
 
 MTU="1500"
-COUNT="5"
-PKT_SIZE="56"
-FLOOD="0"
+COUNT="0"                 # 0 => unlimited; for flood this means Ctrl-C to stop
+PAYLOAD="56"              # ping -s payload
 QUIET="0"
-ONLY_SETUP="0"
-ONLY_TESTS="0"
 DO_CLEANUP="0"
+NO_AUTO_CLEANUP="0"
 
-PING_BIN="${PING_BIN:-ping}"
-ARPING_BIN="${ARPING_BIN:-arping}"
-TRACE_BIN="${TRACE_BIN:-tracepath}"
+STATE_FILE="/tmp/ns-ping-f-test.state"
 
-# Track ifnames to return on cleanup
-STATE_FILE="/tmp/ns-ext-path-test.state"
-
+# -------- Help --------
 usage() {
   cat <<'EOF'
-ns-ext-path-test.sh - External path test using two chosen interfaces moved into namespaces
-No bridges, no veth. The real/existing external path is used as-is.
+ns-ping-f-test.sh - Minimal external path ping flood test with two chosen interfaces (no bridges, no veth)
 
 Usage:
-  sudo ./ns-ext-path-test.sh --src-if IF1 --dst-if IF2 [options]
+  sudo ./ns-ping-f-test.sh --src-if IF1 --dst-if IF2 [options]
+  sudo ./ns-ping-f-test.sh --cleanup
 
 Required:
-  --src-if IFNAME          Root-ns interface to use as source endpoint (must be DOWN)
-  --dst-if IFNAME          Root-ns interface to use as destination endpoint (must be DOWN)
+  --src-if IFNAME          Root-ns interface for source endpoint (must be DOWN)
+  --dst-if IFNAME          Root-ns interface for destination endpoint (must be DOWN)
 
 Options:
-  -s, --src-ns NAME        Source namespace name              (default: src)
-  -d, --dst-ns NAME        Destination namespace name         (default: dst)
-  --src-ip CIDR            Source IP (e.g., 10.10.10.1/30)    (default: 10.10.10.1/30)
-  --dst-ip CIDR            Destination IP (e.g., 10.10.10.2/30) (default: 10.10.10.2/30)
-  --mtu BYTES              MTU for both interfaces            (default: 1500)
+  -s, --src-ns NAME        Source namespace name                  (default: src)
+  -d, --dst-ns NAME        Destination namespace name             (default: dst)
+  --src-ip CIDR            Source IP                              (default: 10.10.10.1/30)
+  --dst-ip CIDR            Destination IP                         (default: 10.10.10.2/30)
+  --mtu BYTES              MTU for both interfaces                (default: 1500)
+  -S, --size BYTES         Ping payload for flood (ping -s)       (default: 56)
+  -c, --count N            Ping count; 0 = unlimited until Ctrl-C (default: 0)
+  -q, --quiet              Reduce script verbosity
 
-  -c, --count N            Number of ping probes              (default: 5)
-  -S, --size BYTES         Ping payload (ping -s)             (default: 56)
-  -f, --flood              Enable ping -f (flood mode, root only)
-  -q, --quiet              Reduced verbosity
+  --cleanup                Move interfaces back to root ns and delete namespaces
+  --no-auto-cleanup        Do NOT auto-cleanup on exit (manual --cleanup required)
 
-  --only-setup             Build namespaces and move interfaces; do not run tests
-  --only-tests             Run tests assuming namespaces/interfaces already set
-  --cleanup                Move interfaces back to root ns, delete namespaces
-
-  -h, --help, -?           Show help and exit
+  -h, --help, -?           Show this help and exit
 
 Examples:
-  # 1) Move two ports (e.g., enp1s0 and enp2s0) into src/dst, assign /30, test with flood:
+  # Prepare (ports must be DOWN in root ns)
   sudo ip link set enp1s0 down
   sudo ip link set enp2s0 down
-  sudo ./ns-ext-path-test.sh --src-if enp1s0 --dst-if enp2s0 --src-ip 192.0.2.1/30 --dst-ip 192.0.2.2/30 -f -c 200 -S 1200
 
-  # 2) Only setup, then run custom tests:
-  sudo ./ns-ext-path-test.sh --src-if enp1s0 --dst-if enp2s0 --only-setup
-  sudo ip netns exec src ping 192.0.2.2
-  sudo ip netns exec src arping -I enp1s0 -c 5 192.0.2.2
+  # Run flood test (stop with Ctrl-C). MTU 1500, payload 1200 bytes:
+  sudo ./ns-ping-f-test.sh --src-if enp1s0 --dst-if enp2s0 --src-ip 192.0.2.1/30 --dst-ip 192.0.2.2/30 --mtu 1500 -S 1200
 
-  # 3) Cleanup (moves ports back to root namespace):
-  sudo ./ns-ext-path-test.sh --cleanup
+  # Limited flood (e.g., 10,000 packets):
+  sudo ./ns-ping-f-test.sh --src-if enp1s0 --dst-if enp2s0 -c 10000
+
+  # Cleanup later:
+  sudo ./ns-ping-f-test.sh --cleanup
 EOF
 }
 
@@ -91,43 +83,62 @@ err() { echo "[!] $*" >&2; }
 
 require_root() {
   if [ "${EUID:-$(id -u)}" -ne 0 ]; then
-    err "Root privileges are required. Please run with sudo."
+    err "Root privileges are required. Run with sudo."
     exit 1
   fi
 }
 
-ns_exists() {
-  ip netns list | awk '{print $1}' | grep -qx -- "$1"
-}
+ns_exists() { ip netns list | awk '{print $1}' | grep -qx -- "$1"; }
 
 check_root_if_down() {
   local ifname="$1"
   ip link show "$ifname" >/dev/null 2>&1 || { err "Interface '$ifname' not found in root namespace."; exit 1; }
-  local state
-  state=$(ip -br link show dev "$ifname" | awk '{print $2}')
+  local state; state=$(ip -br link show dev "$ifname" | awk '{print $2}')
   if [[ "$state" != "DOWN" && "$state" != "UNKNOWN" ]]; then
-    err "Interface '$ifname' must be DOWN before moving. Current state: $state"
+    err "Interface '$ifname' must be DOWN before moving (current: $state)."
     err "Run: sudo ip link set dev $ifname down"
     exit 1
   fi
 }
 
 save_state() {
-  echo "NS_SRC=$NS_SRC" > "$STATE_FILE"
-  echo "NS_DST=$NS_DST" >> "$STATE_FILE"
-  echo "SRC_IF=$SRC_IF" >> "$STATE_FILE"
-  echo "DST_IF=$DST_IF" >> "$STATE_FILE"
+  {
+    echo "NS_SRC=$NS_SRC"
+    echo "NS_DST=$NS_DST"
+    echo "SRC_IF=$SRC_IF"
+    echo "DST_IF=$DST_IF"
+  } > "$STATE_FILE"
 }
 
 load_state() {
-  [ -f "$STATE_FILE" ] || { err "State file not found: $STATE_FILE"; exit 1; }
+  [ -f "$STATE_FILE" ] || { err "State file not found: $STATE_FILE (nothing to cleanup?)"; exit 1; }
   # shellcheck disable=SC1090
   . "$STATE_FILE"
 }
 
+link_status() {
+  # Prints "UP" if operstate is up AND carrier is 1; else "DOWN"
+  local ns="$1" ifn="$2"
+  local oper carrier
+  oper=$(ip -n "$ns" -o link show "$ifn" | awk -F'state ' '{print $2}' | awk '{print $1}' | tr -d ',')
+  # Try sysfs carrier; if not present, fallback to LOWER_UP flag parsing
+  if ip netns exec "$ns" test -r "/sys/class/net/$ifn/carrier"; then
+    carrier=$(ip netns exec "$ns" cat "/sys/class/net/$ifn/carrier" 2>/dev/null || echo 0)
+    if [[ "$oper" == "UP" && "$carrier" == "1" ]]; then
+      echo "UP"; return 0
+    fi
+  else
+    # Fallback: check LOWER_UP flag via ip -br link
+    if ip -n "$ns" -br link show dev "$ifn" | grep -q "LOWER_UP"; then
+      echo "UP"; return 0
+    fi
+  fi
+  echo "DOWN"
+}
+
 create_topology() {
   if [ -z "$SRC_IF" ] || [ -z "$DST_IF" ]; then
-    err "Both --src-if and --dst-if are required (no bridges/veth are created)."
+    err "Both --src-if and --dst-if are required."
     exit 2
   fi
 
@@ -137,105 +148,71 @@ create_topology() {
   ip -n "$NS_SRC" link set lo up
   ip -n "$NS_DST" link set lo up
 
-  log "Moving interfaces into namespaces (no base-ns traffic)"
   check_root_if_down "$SRC_IF"
   check_root_if_down "$DST_IF"
 
+  log "Moving interfaces into namespaces (no root-ns traffic)"
   ip link set "$SRC_IF" netns "$NS_SRC"
   ip link set "$DST_IF" netns "$NS_DST"
 
-  # MTU and up
   ip -n "$NS_SRC" link set "$SRC_IF" mtu "$MTU" up
   ip -n "$NS_DST" link set "$DST_IF" mtu "$MTU" up
 
   # Assign IPs
-  if ! ip -n "$NS_SRC" addr show dev "$SRC_IF" | grep -q "${IP_SRC%/*}"; then
-    ip -n "$NS_SRC" addr add "$IP_SRC" dev "$SRC_IF"
-  fi
-  if ! ip -n "$NS_DST" addr show dev "$DST_IF" | grep -q "${IP_DST%/*}"; then
-    ip -n "$NS_DST" addr add "$IP_DST" dev "$DST_IF"
-  fi
+  ip -n "$NS_SRC" addr add "$IP_SRC" dev "$SRC_IF" || true
+  ip -n "$NS_DST" addr add "$IP_DST" dev "$DST_IF" || true
 
   save_state
-  log "Topology ready. src-if=$SRC_IF in ns=$NS_SRC, dst-if=$DST_IF in ns=$NS_DST"
+  log "Topology ready: $SRC_IF in ns=$NS_SRC, $DST_IF in ns=$NS_DST"
 }
 
 print_topology() {
-  log "=== Topology summary ==="
+  log "=== Topology ==="
   for ns in "$NS_SRC" "$NS_DST"; do
     if ns_exists "$ns"; then
-      echo "[$ns] Links:"
-      ip -n "$ns" -brief link
-      echo "[$ns] Addresses:"
-      ip -n "$ns" -brief addr
+      echo "[$ns] links:"
+      ip -n "$ns" -br link
+      echo "[$ns] addr:"
+      ip -n "$ns" -br addr
       echo
     fi
   done
 }
 
-run_tests() {
-  # Determine endpoint IPs from assigned interfaces
-  local src_ip dst_ip
-  src_ip=$(ip -n "$NS_SRC" -brief addr show dev "$SRC_IF" | awk '{print $3}' | cut -d/ -f1)
-  dst_ip=$(ip -n "$NS_DST" -brief addr show dev "$DST_IF" | awk '{print $3}' | cut -d/ -f1)
-
-  if [ -z "$src_ip" ] || [ -z "$dst_ip" ]; then
-    err "Could not read IPs from interfaces. Verify IP assignment."
+run_ping_flood() {
+  # Resolve IPs without mask
+  local dst_ip
+  dst_ip=$(ip -n "$NS_DST" -br addr show dev "$DST_IF" | awk '{print $3}' | cut -d/ -f1)
+  if [ -z "$dst_ip" ]; then
+    err "Destination IP empty on $NS_DST/$DST_IF."
     exit 1
   fi
 
-  echo "=== ARP/NDP reachability ==="
-  # IPv4 arping; for IPv6, user would use arping -6 (not all distros support -6)
-  if [[ "$dst_ip" =~ : ]]; then
-    echo "(IPv6 detected) Skipping IPv4 arping. Use: ip netns exec $NS_SRC $PING_BIN -6 -c 1 $dst_ip"
-  else
-    ip netns exec "$NS_SRC" "$ARPING_BIN" -I "$SRC_IF" -c 3 "$dst_ip" || true
+  # Link state checks (network down handling)
+  local sstat dstat
+  sstat=$(link_status "$NS_SRC" "$SRC_IF")
+  dstat=$(link_status "$NS_DST" "$DST_IF")
+  if [ "$sstat" != "UP" ] || [ "$dstat" != "UP" ]; then
+    err "Network down: link status -> src:$NS_SRC/$SRC_IF=$sstat, dst:$NS_DST/$DST_IF=$dstat"
+    err "Check cabling/switch/auto-negotiation and try again."
+    exit 1
   fi
 
-  echo
-  echo "=== Ping test (src -> dst) ==="
-  PING_ARGS=(-c "$COUNT" -s "$PKT_SIZE")
-  if [ "$FLOOD" = "1" ]; then
-    PING_ARGS+=(-f)
-    echo "(Flood mode enabled: ping -f)"
+  echo "=== ping flood (src -> dst) ==="
+  echo "Interface src: $NS_SRC/$SRC_IF  ->  dst IP: $dst_ip"
+  local args=(-f -s "$PAYLOAD")
+  if [ "$COUNT" -gt 0 ]; then
+    args=(-f -s "$PAYLOAD" -c "$COUNT")
   fi
-  echo "Command: $PING_BIN ${PING_ARGS[*]} $dst_ip"
-  ip netns exec "$NS_SRC" "$PING_BIN" "${PING_ARGS[@]}" "$dst_ip"
-
-  echo
-  echo "=== Tracepath (src -> dst) ==="
-  # Note: Works for routed paths; for pure L2 it will still show PMTU hops if any.
-  ip netns exec "$NS_SRC" "$TRACE_BIN" -n "$dst_ip" || true
-
-  echo
-  echo "=== Interface statistics (ip -s link) ==="
-  echo "[src:$NS_SRC/$SRC_IF]"
-  ip -n "$NS_SRC" -s link show "$SRC_IF" | sed 's/^/  /'
-  echo "[dst:$NS_DST/$DST_IF]"
-  ip -n "$NS_DST" -s link show "$DST_IF" | sed 's/^/  /'
-
-  echo
-  echo "=== MTU / DF check (IPv4) ==="
-  if [[ ! "$dst_ip" =~ : ]]; then
-    local size_nofrag=$((MTU - 28)) # 20 (IPv4) + 8 (ICMP)
-    if [ "$size_nofrag" -gt 0 ]; then
-      echo "Testing DF path with -s $size_nofrag -M do"
-      ip netns exec "$NS_SRC" "$PING_BIN" -c 3 -s "$size_nofrag" -M do "$dst_ip" || true
-    fi
-  else
-    echo "(IPv6) For PMTU, rely on normal ping/tracepath6; DF is implicit in IPv6."
-  fi
-
-  echo
-  echo "=== Short latency run (50 probes, 20 ms interval) ==="
-  ip netns exec "$NS_SRC" "$PING_BIN" -c 50 -i 0.02 -s "$PKT_SIZE" "$dst_ip" | sed 's/^/  /'
+  echo "Command: ping ${args[*]} $dst_ip"
+  # Run ping inside src namespace
+  ip netns exec "$NS_SRC" ping "${args[@]}" "$dst_ip"
 }
 
 cleanup() {
   log "Cleanup: moving interfaces back to root namespace and deleting namespaces"
   if [ -f "$STATE_FILE" ]; then
     load_state || true
-    # Try to move if still in namespaces
     if ns_exists "$NS_SRC" && ip -n "$NS_SRC" link show "$SRC_IF" >/dev/null 2>&1; then
       ip -n "$NS_SRC" link set "$SRC_IF" down
       ip -n "$NS_SRC" addr flush dev "$SRC_IF" || true
@@ -250,54 +227,45 @@ cleanup() {
   fi
   ns_exists "$NS_SRC" && ip netns delete "$NS_SRC" || true
   ns_exists "$NS_DST" && ip netns delete "$NS_DST" || true
-  log "Cleanup complete."
+  log "Cleanup done."
 }
 
-# ---------- Arg parsing ----------
-if [ $# -eq 0 ]; then
-  usage; exit 0
-fi
-
+# -------- Arg parsing --------
+if [ $# -eq 0 ]; then usage; exit 0; fi
 while [ $# -gt 0 ]; do
   case "$1" in
-    --src-if)    SRC_IF="$2"; shift 2 ;;
-    --dst-if)    DST_IF="$2"; shift 2 ;;
-    -s|--src-ns) NS_SRC="$2"; shift 2 ;;
-    -d|--dst-ns) NS_DST="$2"; shift 2 ;;
-    --src-ip)    IP_SRC="$2"; shift 2 ;;
-    --dst-ip)    IP_DST="$2"; shift 2 ;;
-    --mtu)       MTU="$2"; shift 2 ;;
-    -c|--count)  COUNT="$2"; shift 2 ;;
-    -S|--size)   PKT_SIZE="$2"; shift 2 ;;
-    -f|--flood)  FLOOD="1"; shift 1 ;;
-    -q|--quiet)  QUIET="1"; shift 1 ;;
-    --only-setup) ONLY_SETUP="1"; shift 1 ;;
-    --only-tests) ONLY_TESTS="1"; shift 1 ;;
-    --cleanup)   DO_CLEANUP="1"; shift 1 ;;
-    -h|--help|-\?) usage; exit 0 ;;
+    --src-if)       SRC_IF="$2"; shift 2 ;;
+    --dst-if)       DST_IF="$2"; shift 2 ;;
+    -s|--src-ns)    NS_SRC="$2"; shift 2 ;;
+    -d|--dst-ns)    NS_DST="$2"; shift 2 ;;
+    --src-ip)       IP_SRC="$2"; shift 2 ;;
+    --dst-ip)       IP_DST="$2"; shift 2 ;;
+    --mtu)          MTU="$2"; shift 2 ;;
+    -S|--size)      PAYLOAD="$2"; shift 2 ;;
+    -c|--count)     COUNT="$2"; shift 2 ;;
+    -q|--quiet)     QUIET="1"; shift 1 ;;
+    --cleanup)      DO_CLEANUP="1"; shift 1 ;;
+    --no-auto-cleanup) NO_AUTO_CLEANUP="1"; shift 1 ;;
+    -h|--help|-\?)  usage; exit 0 ;;
     *) err "Unknown option: $1"; usage; exit 2 ;;
   esac
 done
 
 require_root
 
-# ---------- Control flow ----------
+# Auto-cleanup on exit unless disabled
+if [ "$NO_AUTO_CLEANUP" != "1" ] && [ "$DO_CLEANUP" != "1" ]; then
+  trap cleanup EXIT
+fi
+
 if [ "$DO_CLEANUP" = "1" ]; then
   cleanup
   exit 0
 fi
 
-# If tests-only, we need state to know interface names and namespaces
-if [ "$ONLY_TESTS" = "1" ]; then
-  load_state
-  print_topology
-  run_tests
-  exit 0
-fi
-
-# Normal path: build (and optionally test)
 create_topology
 print_topology
-if [ "$ONLY_SETUP" = "0" ]; then
-  run_tests
-fi
+run_ping_flood
+
+# If we reach here and auto-cleanup is enabled, trap will handle cleanup.
+exit 0
