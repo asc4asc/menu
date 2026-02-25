@@ -7,7 +7,7 @@ GRN="\033[0;32m"
 YLW="\033[1;33m"
 NC="\033[0m"
 
-# Unique namespace names per run (prevents collisions)
+# Unique namespace names per run
 SELF_PID="$$"
 NS_SRC="src-${SELF_PID}"
 NS_DST="dst-${SELF_PID}"
@@ -57,12 +57,12 @@ require_root() {
   if [ "$(id -u)" -ne 0 ]; then
     err "Run as root"
     exit 1
-  fi
+  }
 }
 
 ns_exists() { ip netns list | awk '{print $1}' | grep -qx "$1"; }
 
-# If interface is already in ANY namespace → pull it back
+# move interface back if inside a namespace
 restore_if_in_ns() {
   local dev="$1"
   local ns
@@ -100,7 +100,7 @@ cleanup() {
 
   rm -f "$STATE_FILE" || true
 
-  ok "Cleanup complete"
+  ok "Cleanup done"
 }
 
 get_crc() {
@@ -119,7 +119,7 @@ save_state() {
 }
 
 auto_select_ifaces() {
-  log "Auto-selecting interfaces"
+  log "Selecting interfaces automatically"
   local c=()
   for IF in $(ls /sys/class/net); do
     [ "$IF" = "lo" ] && continue
@@ -130,16 +130,15 @@ auto_select_ifaces() {
     if ip -4 addr show dev "$IF" | grep -q "inet "; then continue; fi
     c+=("$IF")
   done
-  [ ${#c[@]} -lt 2 ] && { err "Not enough interfaces"; exit 1; }
+  [ ${#c[@]} -lt 2 ] && { err "Not enough usable interfaces"; exit 1; }
   SRC_IF="${c[0]}"
   DST_IF="${c[1]}"
-  ok "Selected: $SRC_IF $DST_IF"
+  ok "Selected SRC_IF=$SRC_IF DST_IF=$DST_IF"
 }
 
 create_topology() {
   cleanup || true
 
-  # ensure interfaces are in root namespace
   restore_if_in_ns "$SRC_IF"
   restore_if_in_ns "$DST_IF"
 
@@ -162,11 +161,11 @@ create_topology() {
   ip -n "$NS_DST" addr add "$IP_DST" dev "$DST_IF"
 
   save_state
-  ok "Topology ready: $NS_SRC <-> $NS_DST"
+  ok "Topology created: $NS_SRC <-> $NS_DST"
 }
 
 run_test() {
-  local dst_ip jitter=""
+  local dst_ip jitter="" server_pid=""
   dst_ip=$(ip -n "$NS_DST" -br addr show dev "$DST_IF" | awk '{print $3}' | cut -d/ -f1)
 
   sleep "$PRE_SLEEP"
@@ -179,24 +178,32 @@ run_test() {
   tx_before=$(get_packets "$NS_SRC" "$SRC_IF" tx)
   rx_before=$(get_packets "$NS_DST" "$DST_IF" rx)
 
-  if [ "$UDP_MODE" = "1" ]; then
-    ip netns exec "$NS_DST" iperf3 -s -D
-    IPERF_CMD="iperf3 -u -b $UDP_BITRATE -c $dst_ip -t $DURATION -l $PAYLOAD"
-  else
-    ip netns exec "$NS_DST" iperf3 -s -D
-    IPERF_CMD="iperf3 -c $dst_ip -t $DURATION -l $PAYLOAD"
+  # start server ALWAYS without -u
+  ip netns exec "$NS_DST" iperf3 -s -D
+  sleep 1
+
+  # get server pid from namespace
+  server_pid=$(ip netns exec "$NS_DST" pgrep -f "iperf3 -s" | head -n1)
+
+  if [ -z "$server_pid" ]; then
+    err "iperf3 server did not start"
+    exit 1
   fi
 
-  sleep 1
+  if [ "$UDP_MODE" = "1" ]; then
+    IPERF_CMD="iperf3 -u -b $UDP_BITRATE -c $dst_ip -t $DURATION -l $PAYLOAD"
+  else
+    IPERF_CMD="iperf3 -c $dst_ip -t $DURATION -l $PAYLOAD"
+  fi
 
   set +e
   IPERF_OUT="$(ip netns exec "$NS_SRC" $IPERF_CMD 2>&1)"
   IPERF_RC=$?
   set -e
 
-  ip netns exec "$NS_DST" pkill iperf3 || true
+  # kill only THIS iperf3 server
+  ip netns exec "$NS_DST" kill -9 "$server_pid" || true
 
-  # extract jitter (UDP)
   if [ "$UDP_MODE" = "1" ]; then
     jitter=$(echo "$IPERF_OUT" | awk '/ms/{print $(NF-1)}' | sed 's/ms//')
   fi
@@ -215,11 +222,13 @@ run_test() {
   echo "CRC SRC: $((crc_src_after - crc_src_before))"
   echo "CRC DST: $((crc_dst_after - crc_dst_before))"
 
-  [ "$UDP_MODE" = "1" ] && echo "UDP Jitter: ${jitter:-N/A} ms"
+  if [ "$UDP_MODE" = "1" ]; then
+    echo "UDP Jitter: ${jitter:-N/A} ms"
+  fi
 
   echo "$IPERF_OUT"
 
-  [ $IPERF_RC -ne 0 ] && err "iperf3 exit code: $IPERF_RC" || ok "iperf3 OK"
+  [ $IPERF_RC -ne 0 ] && err "iperf3 exit code: $IPERF_RC" || ok "iperf3 test OK"
 }
 
 # ---------- arg parsing ----------
@@ -236,14 +245,13 @@ while [ $# -gt 0 ]; do
     --duration) DURATION="$2"; shift 2 ;;
     --keep) KEEP="1"; shift 1 ;;
     --cleanup) DO_CLEANUP="1"; shift 1 ;;
-    *) err "Unknown option: $1"; usage ;;
+    *) err "Unknown option"; usage ;;
   esac
 done
 
 require_root
 
 [ "$DO_CLEANUP" = "1" ] && cleanup && exit 0
-
 [ "$AUTO_MODE" = "1" ] && auto_select_ifaces
 
 [ "$KEEP" != "1" ] && trap cleanup EXIT
@@ -252,4 +260,3 @@ create_topology
 run_test
 
 [ "$KEEP" = "1" ] && log "Namespaces kept: $NS_SRC $NS_DST"
-``
