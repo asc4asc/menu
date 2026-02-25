@@ -84,7 +84,7 @@ safe_delete_ns() {
   local ns="$1"
   if ns_exists "$ns"; then
     # ip netns pids "$ns" | xargs -r kill -9 || true
-    # ip netns delete "$ns" || true
+    ; # ip netns delete "$ns" || true
   fi
 }
 
