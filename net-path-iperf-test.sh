@@ -180,7 +180,7 @@ run_test() {
   rx_before=$(get_packets "$NS_DST" "$DST_IF" rx)
 
   if [ "$UDP_MODE" = "1" ]; then
-    ip netns exec "$NS_DST" iperf3 -s -u -D
+    ip netns exec "$NS_DST" iperf3 -s -D
     IPERF_CMD="iperf3 -u -b $UDP_BITRATE -c $dst_ip -t $DURATION -l $PAYLOAD"
   else
     ip netns exec "$NS_DST" iperf3 -s -D
