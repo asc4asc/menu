@@ -7,8 +7,10 @@ GRN="\033[0;32m"
 YLW="\033[1;33m"
 NC="\033[0m"
 
-NS_SRC="src"
-NS_DST="dst"
+# Unique namespace names per run (prevents collisions)
+SELF_PID="$$"
+NS_SRC="src-${SELF_PID}"
+NS_DST="dst-${SELF_PID}"
 
 SRC_IF=""
 DST_IF=""
@@ -20,11 +22,15 @@ MTU="1500"
 PAYLOAD="56"
 DURATION="10"
 PRE_SLEEP="2"
+
+UDP_MODE="0"
+UDP_BITRATE="200M"
+
 AUTO_MODE="0"
 KEEP="0"
 DO_CLEANUP="0"
 
-STATE_FILE="/tmp/ns-ping-f.state"
+STATE_FILE="/tmp/ns-iperf-${SELF_PID}.state"
 
 log() { echo -e "[*] $*"; }
 ok()  { echo -e "${GRN}[OK]${NC} $*"; }
@@ -32,18 +38,16 @@ err() { echo -e "${RED}[ERR]${NC} $*" >&2; }
 
 usage() {
   echo "Usage:"
-  echo "  sudo ./$0 [--auto]  or  --src-if X --dst-if Y [options]"
+  echo "  sudo ./ns-test.sh [--auto] or --src-if X --dst-if Y [options]"
   echo ""
   echo "Options:"
-  echo "  --auto                auto-select two interfaces (UP, carrier, no IPv4)"
-  echo "  --src-if IFNAME"
-  echo "  --dst-if IFNAME"
-  echo "  --src-ip CIDR"
-  echo "  --dst-ip CIDR"
-  echo "  --mtu BYTES"
-  echo "  -S --size BYTES   (iperf3 -l payload size)"
-  echo "  --duration SECONDS"
-  echo "  --pre-sleep SECONDS"
+  echo "  --auto"
+  echo "  --src-if IF"
+  echo "  --dst-if IF"
+  echo "  --udp"
+  echo "  --udp-bitrate <rate>"
+  echo "  --size BYTES"
+  echo "  --duration SEC"
   echo "  --keep"
   echo "  --cleanup"
   exit 0
@@ -58,72 +62,41 @@ require_root() {
 
 ns_exists() { ip netns list | awk '{print $1}' | grep -qx "$1"; }
 
+# If interface is already in ANY namespace → pull it back
+restore_if_in_ns() {
+  local dev="$1"
+  local ns
+  ns=$(ip netns identify "$dev" 2>/dev/null || true)
+  if [ -n "$ns" ]; then
+    ip netns exec "$ns" ip link set "$dev" netns 1 || true
+  fi
+}
+
 force_down_root() {
   local ifn="$1"
-  ip link show "$ifn" >/dev/null 2>&1 || { err "Interface $ifn not found"; exit 1; }
-  ip addr flush dev "$ifn" || true
-  ip link set dev "$ifn" down
-}
-
-auto_select_ifaces() {
-  log "Auto-select mode enabled (--auto)"
-  local candidates=()
-
-  for IF in $(ls /sys/class/net); do
-    [ "$IF" = "lo" ] && continue
-    if [ "$(cat /sys/class/net/$IF/operstate 2>/dev/null)" != "up" ]; then continue; fi
-    if [ -r "/sys/class/net/$IF/carrier" ]; then
-      [ "$(cat /sys/class/net/$IF/carrier)" = "1" ] || continue
-    fi
-    if ip -4 addr show dev "$IF" | grep -q "inet "; then continue; fi
-    candidates+=("$IF")
-  done
-
-  if [ "${#candidates[@]}" -lt 2 ]; then
-    err "AUTO mode: less than two valid interfaces found."
-    exit 1
+  if ip link show "$ifn" >/dev/null 2>&1; then
+    ip addr flush dev "$ifn" || true
+    ip link set dev "$ifn" down || true
   fi
-
-  SRC_IF="${candidates[0]}"
-  DST_IF="${candidates[1]}"
-
-  ok "AUTO selected SRC_IF=$SRC_IF DST_IF=$DST_IF"
 }
 
-save_state() {
-  echo "NS_SRC=$NS_SRC" > "$STATE_FILE"
-  echo "NS_DST=$NS_DST" >> "$STATE_FILE"
-  echo "SRC_IF=$SRC_IF" >> "$STATE_FILE"
-  echo "DST_IF=$DST_IF" >> "$STATE_FILE"
-}
-
-load_state() {
-  if [ ! -f "$STATE_FILE" ]; then
-    err "No state file"
-    exit 1
+safe_delete_ns() {
+  local ns="$1"
+  if ns_exists "$ns"; then
+    ip netns pids "$ns" | xargs -r kill -9 || true
+    ip netns delete "$ns" || true
   fi
-  . "$STATE_FILE"
 }
 
 cleanup() {
   log "Cleanup: restoring interfaces"
 
-  load_state || true
+  for iface in "$SRC_IF" "$DST_IF"; do
+    restore_if_in_ns "$iface"
+  done
 
-  if ns_exists "$NS_SRC" && ip -n "$NS_SRC" link show "$SRC_IF" &>/dev/null; then
-    ip -n "$NS_SRC" link set "$SRC_IF" down
-    ip -n "$NS_SRC" addr flush dev "$SRC_IF" || true
-    ip -n "$NS_SRC" link set "$SRC_IF" netns 1 || true
-  fi
-
-  if ns_exists "$NS_DST" && ip -n "$NS_DST" link show "$DST_IF" &>/dev/null; then
-    ip -n "$NS_DST" link set "$DST_IF" down
-    ip -n "$NS_DST" addr flush dev "$DST_IF" || true
-    ip -n "$NS_DST" link set "$DST_IF" netns 1 || true
-  fi
-
-  ns_exists "$NS_SRC" && ip netns delete "$NS_SRC" || true
-  ns_exists "$NS_DST" && ip netns delete "$NS_DST" || true
+  safe_delete_ns "$NS_SRC"
+  safe_delete_ns "$NS_DST"
 
   rm -f "$STATE_FILE" || true
 
@@ -138,12 +111,43 @@ get_packets() {
   ip netns exec "$1" cat "/sys/class/net/$2/statistics/${3}_packets" 2>/dev/null || echo 0
 }
 
+save_state() {
+  echo "NS_SRC=$NS_SRC" > "$STATE_FILE"
+  echo "NS_DST=$NS_DST" >> "$STATE_FILE"
+  echo "SRC_IF=$SRC_IF" >> "$STATE_FILE"
+  echo "DST_IF=$DST_IF" >> "$STATE_FILE"
+}
+
+auto_select_ifaces() {
+  log "Auto-selecting interfaces"
+  local c=()
+  for IF in $(ls /sys/class/net); do
+    [ "$IF" = "lo" ] && continue
+    [ "$(cat /sys/class/net/$IF/operstate)" = "up" ] || continue
+    if [ -r "/sys/class/net/$IF/carrier" ]; then
+      [ "$(cat /sys/class/net/$IF/carrier)" = "1" ] || continue
+    fi
+    if ip -4 addr show dev "$IF" | grep -q "inet "; then continue; fi
+    c+=("$IF")
+  done
+  [ ${#c[@]} -lt 2 ] && { err "Not enough interfaces"; exit 1; }
+  SRC_IF="${c[0]}"
+  DST_IF="${c[1]}"
+  ok "Selected: $SRC_IF $DST_IF"
+}
+
 create_topology() {
+  cleanup || true
+
+  # ensure interfaces are in root namespace
+  restore_if_in_ns "$SRC_IF"
+  restore_if_in_ns "$DST_IF"
+
   force_down_root "$SRC_IF"
   force_down_root "$DST_IF"
 
-  ns_exists "$NS_SRC" || ip netns add "$NS_SRC"
-  ns_exists "$NS_DST" || ip netns add "$NS_DST"
+  ip netns add "$NS_SRC"
+  ip netns add "$NS_DST"
 
   ip -n "$NS_SRC" link set lo up
   ip -n "$NS_DST" link set lo up
@@ -158,40 +162,44 @@ create_topology() {
   ip -n "$NS_DST" addr add "$IP_DST" dev "$DST_IF"
 
   save_state
-  ok "Namespaces + interfaces ready"
+  ok "Topology ready: $NS_SRC <-> $NS_DST"
 }
 
-# ----------------- iperf3 test -----------------
 run_test() {
-  local dst_ip
+  local dst_ip jitter=""
   dst_ip=$(ip -n "$NS_DST" -br addr show dev "$DST_IF" | awk '{print $3}' | cut -d/ -f1)
 
-  echo
+  sleep "$PRE_SLEEP"
+
   local crc_src_before crc_dst_before
   crc_src_before=$(get_crc "$NS_SRC" "$SRC_IF")
   crc_dst_before=$(get_crc "$NS_DST" "$DST_IF")
-
-  echo -e "${YLW}Sleeping ${PRE_SLEEP}s before iperf3...${NC}"
-  sleep "$PRE_SLEEP"
 
   local tx_before rx_before
   tx_before=$(get_packets "$NS_SRC" "$SRC_IF" tx)
   rx_before=$(get_packets "$NS_DST" "$DST_IF" rx)
 
-  echo "Starting iperf3 server in namespace $NS_DST..."
-  ip netns exec "$NS_DST" iperf3 -s -D
+  if [ "$UDP_MODE" = "1" ]; then
+    ip netns exec "$NS_DST" iperf3 -s -u -D
+    IPERF_CMD="iperf3 -u -b $UDP_BITRATE -c $dst_ip -t $DURATION -l $PAYLOAD"
+  else
+    ip netns exec "$NS_DST" iperf3 -s -D
+    IPERF_CMD="iperf3 -c $dst_ip -t $DURATION -l $PAYLOAD"
+  fi
+
   sleep 1
 
-  echo "Running: iperf3 -c $dst_ip -t $DURATION -l $PAYLOAD"
-
   set +e
-  IPERF_OUT="$(ip netns exec "$NS_SRC" iperf3 -c "$dst_ip" -t "$DURATION" -l "$PAYLOAD" 2>&1)"
+  IPERF_OUT="$(ip netns exec "$NS_SRC" $IPERF_CMD 2>&1)"
   IPERF_RC=$?
   set -e
 
-  echo "$IPERF_OUT"
-
   ip netns exec "$NS_DST" pkill iperf3 || true
+
+  # extract jitter (UDP)
+  if [ "$UDP_MODE" = "1" ]; then
+    jitter=$(echo "$IPERF_OUT" | awk '/ms/{print $(NF-1)}' | sed 's/ms//')
+  fi
 
   local tx_after rx_after
   tx_after=$(get_packets "$NS_SRC" "$SRC_IF" tx)
@@ -201,26 +209,17 @@ run_test() {
   crc_src_after=$(get_crc "$NS_SRC" "$SRC_IF")
   crc_dst_after=$(get_crc "$NS_DST" "$DST_IF")
 
-  echo
   echo "=== RESULTS ==="
+  echo "TX: $((tx_after - tx_before))"
+  echo "RX: $((rx_after - rx_before))"
+  echo "CRC SRC: $((crc_src_after - crc_src_before))"
+  echo "CRC DST: $((crc_dst_after - crc_dst_before))"
 
-  local tx_delta=$((tx_after - tx_before))
-  local rx_delta=$((rx_after - rx_before))
-  local crc_src_delta=$((crc_src_after - crc_src_before))
-  local crc_dst_delta=$((crc_dst_after - crc_dst_before))
+  [ "$UDP_MODE" = "1" ] && echo "UDP Jitter: ${jitter:-N/A} ms"
 
-  [ "$tx_delta" -gt 0 ] && ok "TX packets delta: $tx_delta" || err "TX packets delta: $tx_delta"
-  [ "$rx_delta" -gt 0 ] && ok "RX packets delta: $rx_delta" || err "RX packets delta: $rx_delta"
-  [ "$crc_src_delta" -eq 0 ] && ok "CRC src delta: 0" || err "CRC src delta: $crc_src_delta"
-  [ "$crc_dst_delta" -eq 0 ] && ok "CRC dst delta: 0" || err "CRC dst delta: $crc_dst_delta"
+  echo "$IPERF_OUT"
 
-  if echo "$IPERF_OUT" | grep -q "error"; then
-    err "iperf3 reported an error"
-  else
-    ok "iperf3 completed without error"
-  fi
-
-  if [ $IPERF_RC -ne 0 ]; then err "iperf3 exit code: $IPERF_RC"; else ok "iperf3 exit code: 0"; fi
+  [ $IPERF_RC -ne 0 ] && err "iperf3 exit code: $IPERF_RC" || ok "iperf3 OK"
 }
 
 # ---------- arg parsing ----------
@@ -231,42 +230,26 @@ while [ $# -gt 0 ]; do
     --auto) AUTO_MODE="1"; shift 1 ;;
     --src-if) SRC_IF="$2"; shift 2 ;;
     --dst-if) DST_IF="$2"; shift 2 ;;
-    --src-ip) IP_SRC="$2"; shift 2 ;;
-    --dst-ip) IP_DST="$2"; shift 2 ;;
-    --mtu) MTU="$2"; shift 2 ;;
-    -S|--size) PAYLOAD="$2"; shift 2 ;;
+    --udp) UDP_MODE="1"; shift 1 ;;
+    --udp-bitrate) UDP_BITRATE="$2"; shift 2 ;;
+    --size) PAYLOAD="$2"; shift 2 ;;
     --duration) DURATION="$2"; shift 2 ;;
-    --pre-sleep) PRE_SLEEP="$2"; shift 2 ;;
     --keep) KEEP="1"; shift 1 ;;
     --cleanup) DO_CLEANUP="1"; shift 1 ;;
-    -h|--help|-\?) usage ;;
     *) err "Unknown option: $1"; usage ;;
   esac
 done
 
 require_root
 
-if [ "$AUTO_MODE" = "1" ]; then
-  auto_select_ifaces
-fi
+[ "$DO_CLEANUP" = "1" ] && cleanup && exit 0
 
-if [ -z "$SRC_IF" ] || [ -z "$DST_IF" ]; then
-  err "You must specify --auto or --src-if and --dst-if"
-  exit 1
-fi
+[ "$AUTO_MODE" = "1" ] && auto_select_ifaces
 
-if [ "$DO_CLEANUP" = "1" ]; then
-  cleanup
-  exit 0
-fi
-
-if [ "$KEEP" != "1" ]; then
-  trap cleanup EXIT
-fi
+[ "$KEEP" != "1" ] && trap cleanup EXIT
 
 create_topology
 run_test
 
-if [ "$KEEP" = "1" ]; then
-  log "Namespaces kept. Run --cleanup manually."
-fi
+[ "$KEEP" = "1" ] && log "Namespaces kept: $NS_SRC $NS_DST"
+``
