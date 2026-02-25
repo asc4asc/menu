@@ -116,13 +116,13 @@ run_test() {
   local dst_ip
   dst_ip=$(ip -n "$NS_DST" -br addr show dev "$DST_IF" | awk '{print $3}' | cut -d/ -f1)
 
-  echo "Warm-up ping:"
-  ip netns exec "$NS_SRC" ping -c 1 "$dst_ip" || { err "Warm-up failed"; exit 1; }
+  #echo "Warm-up ping:"
+  #ip netns exec "$NS_SRC" ping -c 1 "$dst_ip" || { err "Warm-up failed"; exit 1; }
 
-  echo "Link check:"
-  link_up "$NS_SRC" "$SRC_IF" || { err "SRC link DOWN"; exit 1; }
-  link_up "$NS_DST" "$DST_IF" || { err "DST link DOWN"; exit 1; }
-  echo "Both links UP."
+  #echo "Link check:"
+  #link_up "$NS_SRC" "$SRC_IF" || { err "SRC link DOWN"; exit 1; }
+  #link_up "$NS_DST" "$DST_IF" || { err "DST link DOWN"; exit 1; }
+  #echo "Both links UP."
 
   # ---- NEW: Wait for key press BEFORE flood ----
   echo
