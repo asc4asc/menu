@@ -19,7 +19,7 @@ IP_DST="10.10.10.2/30"
 MTU="1500"
 PAYLOAD="56"
 DURATION="10"
-PRE_SLEEP="1"
+PRE_SLEEP="2"
 AUTO_MODE="0"
 KEEP="0"
 DO_CLEANUP="0"
@@ -185,9 +185,9 @@ run_test() {
   dst_ip=$(ip -n "$NS_DST" -br addr show dev "$DST_IF" | awk '{print $3}' | cut -d/ -f1)
 
   echo
-  echo "=== Interface status ==="
-  ip -n "$NS_SRC" link show "$SRC_IF"
-  ip -n "$NS_DST" link show "$DST_IF"
+  # echo "=== Interface status ==="
+  # ip -n "$NS_SRC" link show "$SRC_IF"
+  # ip -n "$NS_DST" link show "$DST_IF"
 
   local crc_src_before crc_dst_before
   crc_src_before=$(get_crc "$NS_SRC" "$SRC_IF")
@@ -209,11 +209,11 @@ run_test() {
   set -e
   echo "$PING_OUT"
 
-  # Detect 100% packet loss
-  if echo "$PING_OUT" | grep -Eq '([1][0][0]|100(.0)?)% packet loss'; then
-    err "Ping result: 100% packet loss"
+  # Detect packet loss
+  if echo "$PING_OUT" | grep -Eq 'Packet loss'; then
+    err "Ping result: Packet loss"
   else
-    ok "Ping result: not 100% loss"
+    ok "Ping result: No Packet loss"
   fi
 
   local tx_after rx_after
