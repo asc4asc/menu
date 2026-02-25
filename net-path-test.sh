@@ -236,4 +236,68 @@ cleanup() {
   if [ -f "$STATE_FILE" ]; then
     load_state || true
     # Try to move if still in namespaces
+    if ns_exists "$NS_SRC" && ip -n "$NS_SRC" link show "$SRC_IF" >/dev/null 2>&1; then
+      ip -n "$NS_SRC" link set "$SRC_IF" down
+      ip -n "$NS_SRC" addr flush dev "$SRC_IF" || true
+      ip -n "$NS_SRC" link set "$SRC_IF" netns 1 || true
+    fi
+    if ns_exists "$NS_DST" && ip -n "$NS_DST" link show "$DST_IF" >/dev/null 2>&1; then
+      ip -n "$NS_DST" link set "$DST_IF" down
+      ip -n "$NS_DST" addr flush dev "$DST_IF" || true
+      ip -n "$NS_DST" link set "$DST_IF" netns 1 || true
+    fi
+    rm -f "$STATE_FILE" || true
+  fi
+  ns_exists "$NS_SRC" && ip netns delete "$NS_SRC" || true
+  ns_exists "$NS_DST" && ip netns delete "$NS_DST" || true
+  log "Cleanup complete."
+}
 
+# ---------- Arg parsing ----------
+if [ $# -eq 0 ]; then
+  usage; exit 0
+fi
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --src-if)    SRC_IF="$2"; shift 2 ;;
+    --dst-if)    DST_IF="$2"; shift 2 ;;
+    -s|--src-ns) NS_SRC="$2"; shift 2 ;;
+    -d|--dst-ns) NS_DST="$2"; shift 2 ;;
+    --src-ip)    IP_SRC="$2"; shift 2 ;;
+    --dst-ip)    IP_DST="$2"; shift 2 ;;
+    --mtu)       MTU="$2"; shift 2 ;;
+    -c|--count)  COUNT="$2"; shift 2 ;;
+    -S|--size)   PKT_SIZE="$2"; shift 2 ;;
+    -f|--flood)  FLOOD="1"; shift 1 ;;
+    -q|--quiet)  QUIET="1"; shift 1 ;;
+    --only-setup) ONLY_SETUP="1"; shift 1 ;;
+    --only-tests) ONLY_TESTS="1"; shift 1 ;;
+    --cleanup)   DO_CLEANUP="1"; shift 1 ;;
+    -h|--help|-\?) usage; exit 0 ;;
+    *) err "Unknown option: $1"; usage; exit 2 ;;
+  esac
+done
+
+require_root
+
+# ---------- Control flow ----------
+if [ "$DO_CLEANUP" = "1" ]; then
+  cleanup
+  exit 0
+fi
+
+# If tests-only, we need state to know interface names and namespaces
+if [ "$ONLY_TESTS" = "1" ]; then
+  load_state
+  print_topology
+  run_tests
+  exit 0
+fi
+
+# Normal path: build (and optionally test)
+create_topology
+print_topology
+if [ "$ONLY_SETUP" = "0" ]; then
+  run_tests
+fi
