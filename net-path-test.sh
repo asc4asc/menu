@@ -12,7 +12,7 @@ IP_DST="10.10.10.2/30"
 
 MTU="1500"
 PAYLOAD="56"
-DURATION="10"      # default
+DURATION="10"
 KEEP="0"
 DO_CLEANUP="0"
 
@@ -31,9 +31,9 @@ usage() {
   echo "  --dst-ip CIDR"
   echo "  --mtu BYTES"
   echo "  -S --size BYTES"
-  echo "  --duration SECONDS     (default: 10)"
-  echo "  --keep                 keep namespaces after test"
-  echo "  --cleanup              restore interfaces"
+  echo "  --duration SECONDS      (default: 10)"
+  echo "  --keep                  keep namespaces after test"
+  echo "  --cleanup               restore interfaces"
   exit 0
 }
 
@@ -46,19 +46,6 @@ force_down_root() {
   ip link show "$ifn" >/dev/null 2>&1 || { err "Interface $ifn not found in root namespace"; exit 1; }
   ip addr flush dev "$ifn" || true
   ip link set dev "$ifn" down
-}
-
-link_is_up() {
-  local ifn="$1"
-  # operstate must be up
-  local op
-  op=$(cat /sys/class/net/"$ifn"/operstate)
-  [ "$op" = "up" ] || return 1
-  # carrier must be 1 (if exists)
-  if [ -r "/sys/class/net/$ifn/carrier" ]; then
-    [ "$(cat /sys/class/net/$ifn/carrier)" = "1" ] || return 1
-  fi
-  return 0
 }
 
 save_state() {
@@ -99,7 +86,6 @@ cleanup() {
   log "Cleanup complete"
 }
 
-# CRC counters from sysfs
 get_crc() {
   ip netns exec "$1" cat "/sys/class/net/$2/statistics/rx_crc_errors" 2>/dev/null || echo 0
 }
@@ -112,17 +98,6 @@ get_packets() {
 create_topology() {
   force_down_root "$SRC_IF"
   force_down_root "$DST_IF"
-
-  # Check that BOTH interfaces are physically LINK UP in root (carrier)
-  # → ensures external cable/media-path OK BEFORE moving to namespaces
-  if ! link_is_up "$SRC_IF"; then
-    err "Source interface $SRC_IF has NO CARRIER. Check cable."
-    exit 1
-  fi
-  if ! link_is_up "$DST_IF"; then
-    err "Destination interface $DST_IF has NO CARRIER. Check cable."
-    exit 1
-  fi
 
   ns_exists "$NS_SRC" || ip netns add "$NS_SRC"
   ns_exists "$NS_DST" || ip netns add "$NS_DST"
@@ -147,11 +122,10 @@ run_test() {
   dst_ip=$(ip -n "$NS_DST" -br addr show dev "$DST_IF" | awk '{print $3}' | cut -d/ -f1)
 
   echo
-  echo "=== LINK CHECK ==="
+  echo "=== Interface status ==="
   ip -n "$NS_SRC" link show "$SRC_IF"
   ip -n "$NS_DST" link show "$DST_IF"
 
-  # Show CRC existing
   local crc_src_before crc_dst_before
   crc_src_before=$(get_crc "$NS_SRC" "$SRC_IF")
   crc_dst_before=$(get_crc "$NS_DST" "$DST_IF")
@@ -208,7 +182,6 @@ if [ "$DO_CLEANUP" = "1" ]; then
   exit 0
 fi
 
-# Auto cleanup unless --keep
 if [ "$KEEP" != "1" ]; then
   trap cleanup EXIT
 fi
