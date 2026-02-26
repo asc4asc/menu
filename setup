@@ -7,7 +7,7 @@
 if ! grep -q '# BEGIN menu is ready' $HOME/.bashrc ; then 
   echo '# BEGIN menu is ready' >>$HOME/.bashrc
   echo 'PATH=$PATH:"."' >>$HOME/.bashrc
-  echo 'if [ $(tty) == /dev/tty1 ] || [ $(tty) == /dev/pts/0 ]; then if [ -d "todo" ] && [ "$(ls -A todo)" ] ; then run-parts todo && cd menu ; else cd && cd menu && menu; fi; fi'>> $HOME/.bashrc 
+  echo 'if [ $(tty) == /dev/tty1 ] || [ $(tty) == /dev/pts/0 ]; then if [ -d "todo" ] && [ "$(ls -A todo)" ] ; then run-parts todo && cd menu && menu.sh ; else cd && cd menu && menu.sh; fi; fi'>> $HOME/.bashrc 
   echo '# END menu is ready' >>$HOME/.bashrc
 fi
 # tasksel ???
