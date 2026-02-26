@@ -288,8 +288,6 @@ detect_mode_run() {
   for IF in $(ls /sys/class/net); do
     [ "$IF" = "lo" ] && continue
     if ip -4 addr show dev "$IF" | grep -q "inet "; then continue; fi
-    [ -r "/sys/class/net/$IF/operstate" ] || continue
-    [ "$(cat /sys/class/net/$IF/operstate)" = "up" ] || continue
     c+=("$IF")
   done
   if [ ${#c[@]} -lt 2 ]; then
