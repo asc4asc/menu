@@ -46,7 +46,7 @@ usage() {
   echo "  sudo ./ns-iperf.sh [--auto] or --src-if X --dst-if Y [options]"
   echo ""
   echo "Options:"
-  echo "  --auto"
+  echo "  --auto -a"
   echo "  --detect | -d"
   echo "  --src-if IF"
   echo "  --dst-if IF"
@@ -54,7 +54,7 @@ usage() {
   echo "  --dst-ip CIDR         (default: ${IP_DST})"
   echo "  --mtu BYTES           (default: ${MTU})"
   echo "  --size BYTES          (iperf3 -l, default: ${PAYLOAD})"
-  echo "  --duration SEC        (default: ${DURATION})"
+  echo "  --duration SEC -D SEC (default: ${DURATION})"
   echo "  --pre-sleep SEC       (default: ${PRE_SLEEP})"
   echo "  --port N              (server/client port, default random: ${IPERF_PORT})"
   echo "  --udp"
@@ -314,7 +314,7 @@ detect_mode_run() {
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --auto) AUTO_MODE="1"; shift 1 ;;
+    --auto|-a) AUTO_MODE="1"; shift 1 ;;
     --detect|-d) DETECT_MODE="1"; shift 1 ;;
     --src-if) SRC_IF="$2"; shift 2 ;;
     --dst-if) DST_IF="$2"; shift 2 ;;
@@ -322,7 +322,7 @@ while [ $# -gt 0 ]; do
     --dst-ip) IP_DST="$2"; shift 2 ;;
     --mtu) MTU="$2"; shift 2 ;;
     --size) PAYLOAD="$2"; shift 2 ;;
-    --duration) DURATION="$2"; shift 2 ;;
+    --duration|-D) DURATION="$2"; shift 2 ;;
     --pre-sleep) PRE_SLEEP="$2"; shift 2 ;;
     --port) IPERF_PORT="$2"; shift 2 ;;
     --udp) UDP_MODE="1"; shift 1 ;;
