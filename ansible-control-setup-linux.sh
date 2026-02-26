@@ -1,8 +1,8 @@
 #!/bin/bash
 set -e
 
-echo "=== Updating System ==="
-sudo apt update && sudo apt upgrade -y
+# echo "=== Updating System ==="
+# sudo apt update && sudo apt upgrade -y
 
 echo "=== Installing base packages ==="
 sudo apt install -y \
@@ -11,15 +11,14 @@ sudo apt install -y \
     python3-pip \
     python3-venv \
     ssh \
-    curl \
-    nano \
-    software-properties-common
-
+    curl 
+    
 echo "=== Installing Ansible ==="
 sudo apt install -y ansible
 
 echo "=== Installing ansible-lint ==="
-pip3 install --user ansible-lint
+sudo apt install -y ansible-lint
+# pip3 install --user ansible-lint
 
 echo "=== Creating SSH key for GitHub (if not existing) ==="
 if [ ! -f ~/.ssh/id_ed25519 ]; then
@@ -31,22 +30,13 @@ fi
 echo "=== Setting SSH permissions ==="
 chmod 700 ~/.ssh
 chmod 600 ~/.ssh/id_ed25519
-chmod 644 ~/.ssh/id_ed25519.pub
+# chmod 644 ~/.ssh/id_ed25519.pub
 
-echo "=== Enabling SSH service ==="
-sudo systemctl enable --now ssh
+# echo "=== Enabling SSH service ==="
+# sudo systemctl enable --now ssh
 
-echo "=== Adding GitHub to known hosts ==="
-ssh-keyscan github.com >> ~/.ssh/known_hosts
-chmod 644 ~/.ssh/known_hosts
+# echo "=== Adding GitHub to known hosts ==="
+# ssh-keyscan github.com >> ~/.ssh/known_hosts
+# chmod 644 ~/.ssh/known_hosts
 
 echo "=== Setup complete ==="
-echo "--------------------------------------------"
-echo "Öffne diesen Public Key in GitHub -> Settings -> SSH Keys:"
-echo
-cat ~/.ssh/id_ed25519.pub
-echo
-echo "--------------------------------------------"
-echo "Danach kannst du das Repo klonen mit:"
-echo "git clone git@github.com:DEINACCOUNT/DEINREPO.git"
-echo "--------------------------------------------"
