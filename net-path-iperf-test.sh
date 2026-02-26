@@ -29,10 +29,9 @@ UDP_BITRATE="200M" # iperf3 -b bei UDP verpflichtend
 AUTO_MODE="0"
 KEEP="0"
 DO_CLEANUP="0"
-DETECT_MODE="0"    # <-- neu
+DETECT_MODE="0"
 
-# Eigener Port pro Lauf (Default: zufällig im Ephemeral-Bereich)
-# Kann per --port überschrieben werden
+# Port im Ephemeral-Range (kann per --port gesetzt werden)
 IPERF_PORT="$(shuf -i 20000-60999 -n 1)"
 
 STATE_FILE="/tmp/ns-iperf-${SELF_PID}.state"
@@ -55,13 +54,12 @@ usage() {
   echo "  --size BYTES          (iperf3 -l, default: ${PAYLOAD})"
   echo "  --duration SEC        (default: ${DURATION})"
   echo "  --pre-sleep SEC       (default: ${PRE_SLEEP})"
-  echo "  --port N              (server/client port, default random: ${IPERF_PORT})"
+  echo "  --port N              (server/client port, default: ${IPERF_PORT})"
   echo "  --udp"
-  echo "  --udp-bitrate RATE    (e.g. 200M)"
+  echo "  --udp-bitrate RATE"
   echo "  --keep"
   echo "  --cleanup"
-  echo "  --detect, -d          (zeige die nächsten 2 NICs, die derzeit down/ohne IPv4 sind und"
-  echo "                        voraussichtlich per --auto gewählt werden; beendet danach)"
+  echo "  --detect, -d          Show next two down/no-IP ports and blink their LEDs for 3s."
   exit 0
 }
 
@@ -74,7 +72,6 @@ require_root() {
 
 ns_exists() { ip netns list | awk '{print $1}' | grep -qx "$1"; }
 
-# Move interface back to root if inside any namespace
 restore_if_in_ns() {
   local dev="$1"
   local ns
@@ -133,41 +130,66 @@ save_state() {
   } > "$STATE_FILE"
 }
 
-# --- NEU: Detection für die nächsten 2 'down' Ports ---
+###############################################################################
+# NEW: Blink LEDs of an interface for 3 seconds
+###############################################################################
+blink_interface() {
+  local IF="$1"
+  local LEDPATH="/sys/class/net/$IF/device/leds"
+
+  if [ ! -d "$LEDPATH" ]; then
+    log "Interface $IF has no LED control (no leds/ directory)."
+    return
+  fi
+
+  log "Blinking LEDs of $IF for 3 seconds…"
+
+  for LED in "$LEDPATH"/*; do
+    [ -d "$LED" ] || continue
+    if [ -w "$LED/trigger" ]; then
+      echo timer > "$LED/trigger"
+      echo 200 > "$LED/delay_on"
+      echo 200 > "$LED/delay_off"
+    fi
+  done
+
+  sleep 3
+
+  # Restore defaults
+  for LED in "$LEDPATH"/*; do
+    [ -d "$LED" ] || continue
+    if [ -w "$LED/trigger" ]; then
+      echo default-on > "$LED/trigger" 2>/dev/null || echo none > "$LED/trigger"
+    fi
+  done
+}
+
+###############################################################################
+# Detect interfaces
+###############################################################################
 detect_next_ifaces() {
-  log "Detecting two ports (down/ohne IPv4), die voraussichtlich per --auto gewählt werden"
+  log "Detecting two ports currently down/no IPv4…"
 
   local candidates=()
-  # natürlich sortieren (eth2 vor eth10)
+
   for IF in $(ls -1 /sys/class/net | sort -V); do
-    # lo überspringen
     [ "$IF" = "lo" ] && continue
-
-    # nur physische NICs (haben /device)
     [ -e "/sys/class/net/$IF/device" ] || continue
-
-    # operstate lesbar?
     [ -r "/sys/class/net/$IF/operstate" ] || continue
 
-    # wenn Teil von Bond/Bridge (master), überspringen
     if ip -d link show dev "$IF" 2>/dev/null | grep -q "master "; then
       continue
     fi
 
-    # NIC darf keine IPv4-Adresse haben
     if ip -4 addr show dev "$IF" | grep -q "inet "; then
       continue
     fi
 
-    # Status ermitteln
     local oper carrier
     oper="$(cat /sys/class/net/$IF/operstate 2>/dev/null || echo unknown)"
     carrier=0
-    if [ -r "/sys/class/net/$IF/carrier" ]; then
-      carrier="$(cat /sys/class/net/$IF/carrier 2>/dev/null || echo 0)"
-    fi
+    [ -r "/sys/class/net/$IF/carrier" ] && carrier="$(cat /sys/class/net/$IF/carrier)"
 
-    # 'nicht up' => oper != up ODER Carrier != 1
     if [ "$oper" != "up" ] || [ "$carrier" != "1" ]; then
       candidates+=("$IF")
     fi
@@ -176,17 +198,23 @@ detect_next_ifaces() {
   done
 
   if [ ${#candidates[@]} -lt 2 ]; then
-    err "DETECT: weniger als zwei passende Ports gefunden (down, physisch, ohne IPv4, nicht in Bridge/Bond)."
+    err "Less than two suitable ports found."
     exit 1
   fi
 
+  blink_interface "${candidates[0]}"
+  blink_interface "${candidates[1]}"
+
   echo
   echo "=== DETECT RESULT ==="
-  echo "Kandidaten (down/ohne IPv4): ${candidates[0]} ${candidates[1]}"
-  echo "Hinweis: Sobald Link (Carrier) anliegt, werden diese Ports voraussichtlich durch --auto gewählt."
+  echo "Next two candidate ports: ${candidates[0]}  ${candidates[1]}"
+  echo "These will likely be chosen by --auto after link-up."
   exit 0
 }
 
+###############################################################################
+# AUTO mode selection
+###############################################################################
 auto_select_ifaces() {
   log "Auto-selecting interfaces"
   local c=()
@@ -194,21 +222,18 @@ auto_select_ifaces() {
     [ "$IF" = "lo" ] && continue
     [ -r "/sys/class/net/$IF/operstate" ] || continue
 
-    # muss 'up' sein
     [ "$(cat /sys/class/net/$IF/operstate)" = "up" ] || continue
 
-    # wenn Carrier-File existiert, muss es 1 sein
     if [ -r "/sys/class/net/$IF/carrier" ]; then
       [ "$(cat /sys/class/net/$IF/carrier)" = "1" ] || continue
     fi
 
-    # keine IPv4-Adresse
     if ip -4 addr show dev "$IF" | grep -q "inet "; then continue; fi
 
     c+=("$IF")
   done
   if [ ${#c[@]} -lt 2 ]; then
-    err "AUTO mode: less than two valid interfaces found."
+    err "AUTO mode: less than two valid interfaces."
     exit 1
   fi
   SRC_IF="${c[0]}"
@@ -216,8 +241,10 @@ auto_select_ifaces() {
   ok "Selected: SRC_IF=$SRC_IF DST_IF=$DST_IF"
 }
 
+###############################################################################
+# Namespace topology + iperf
+###############################################################################
 create_topology() {
-  # do NOT global cleanup of others; only our IFs
   restore_if_in_ns "$SRC_IF"
   restore_if_in_ns "$DST_IF"
 
@@ -244,21 +271,14 @@ create_topology() {
 }
 
 start_iperf_server() {
-  # Server IMMER ohne -u starten, auf eigenem Port; PID exakt erfassen
   local pid
   pid="$(ip netns exec "$NS_DST" sh -c "nohup iperf3 -s -p $IPERF_PORT >/dev/null 2>&1 & echo \$!")"
-  # Kurzes Warten und Prüfung, dass der Port lauscht
   sleep 0.3
-  # optionaler Check: falls ss vorhanden
-  if ip netns exec "$NS_DST" command -v ss >/dev/null 2>&1; then
-    ip netns exec "$NS_DST" ss -lntup 2>/dev/null | grep -q ":$IPERF_PORT " || true
-  fi
   echo "$pid"
 }
 
 stop_iperf_server() {
   local pid="$1"
-  # Nur diesen konkreten Prozess beenden (kein pkill)
   ip netns exec "$NS_DST" sh -c "
     kill -TERM $pid 2>/dev/null || true
     for i in \$(seq 1 20); do
@@ -269,7 +289,6 @@ stop_iperf_server() {
   "
 }
 
-# ----------------- iperf3 test -----------------
 run_test() {
   local dst_ip jitter="" server_pid=""
   dst_ip=$(ip -n "$NS_DST" -br addr show dev "$DST_IF" | awk '{print $3}' | cut -d/ -f1)
@@ -287,7 +306,7 @@ run_test() {
 
   server_pid="$(start_iperf_server)"
   if [ -z "$server_pid" ]; then
-    err "Failed to start iperf3 server"
+    err "Could not start iperf3 server"
     exit 1
   fi
 
@@ -303,12 +322,9 @@ run_test() {
   IPERF_RC=$?
   set -e
 
-  # Nur unseren eigenen Server beenden
   stop_iperf_server "$server_pid"
 
-  # UDP Jitter extrahieren (letzte Zeile mit 'ms' aus dem Summen-/Receiver-Block)
   if [ "$UDP_MODE" = "1" ]; then
-    # Greife die letzte sinnvolle Zeile mit 'ms' (Jitter) ab und ziehe die Zahl vor 'ms'
     jitter="$(echo "$IPERF_OUT" \
       | awk '/sec/ && /ms/ {line=$0} END{print line}' \
       | awk '{for(i=1;i<=NF;i++){if($i ~ /ms$/){gsub(/ms/,"",$i);v=$i}}} END{if(v!="")print v}')"
@@ -330,9 +346,7 @@ run_test() {
   echo "RX packets delta: $((rx_after - rx_before))"
   echo "CRC src delta: $((crc_src_after - crc_src_before))"
   echo "CRC dst delta: $((crc_dst_after - crc_dst_before))"
-  if [ "$UDP_MODE" = "1" ]; then
-    echo "UDP Jitter: ${jitter:-N/A} ms"
-  fi
+  [ "$UDP_MODE" = "1" ] && echo "UDP Jitter: ${jitter:-N/A} ms"
 
   echo
   echo "$IPERF_OUT"
@@ -344,7 +358,9 @@ run_test() {
   fi
 }
 
-# ---------- arg parsing ----------
+###############################################################################
+# Argument parsing
+###############################################################################
 [ $# -eq 0 ] && usage
 
 while [ $# -gt 0 ]; do
@@ -376,7 +392,6 @@ if [ "$DO_CLEANUP" = "1" ]; then
   exit 0
 fi
 
-# Nur Detection? Dann hier beenden.
 if [ "$DETECT_MODE" = "1" ]; then
   detect_next_ifaces
 fi
@@ -390,7 +405,6 @@ if [ -z "$SRC_IF" ] || [ -z "$DST_IF" ]; then
   exit 1
 fi
 
-# Auto-cleanup unless keeping
 if [ "$KEEP" != "1" ]; then
   trap cleanup EXIT
 fi
