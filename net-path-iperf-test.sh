@@ -7,7 +7,6 @@ GRN="\033[0;32m"
 YLW="\033[1;33m"
 NC="\033[0m"
 
-# Unique namespace names per run (prevents collisions)
 SELF_PID="$$"
 NS_SRC="src-${SELF_PID}"
 NS_DST="dst-${SELF_PID}"
@@ -19,20 +18,18 @@ IP_SRC="10.10.10.1/30"
 IP_DST="10.10.10.2/30"
 
 MTU="1500"
-PAYLOAD="56"       # iperf3 -l (Bytes)
+PAYLOAD="56"
 DURATION="10"
 PRE_SLEEP="2"
 
 UDP_MODE="0"
-UDP_BITRATE="200M" # iperf3 -b bei UDP verpflichtend
+UDP_BITRATE="200M"
 
 AUTO_MODE="0"
 KEEP="0"
 DO_CLEANUP="0"
-DETECT_MODE="0"    # <-- NEU: -d/--detect
+DETECT_MODE="0"   ### NEU
 
-# Eigener Port pro Lauf (Default: zufällig im Ephemeral-Bereich)
-# Kann per --port überschrieben werden
 IPERF_PORT="$(shuf -i 20000-60999 -n 1)"
 
 STATE_FILE="/tmp/ns-iperf-${SELF_PID}.state"
@@ -47,18 +44,18 @@ usage() {
   echo ""
   echo "Options:"
   echo "  --auto"
-  echo "  --detect | -d         (ermittle & blinke die Ports, die --auto wählen würde)"
+  echo "  --detect | -d      (zeige & blinken Interfaces, die AUTO als nächste DOWN-Ports wählen würde)"
   echo "  --src-if IF"
   echo "  --dst-if IF"
-  echo "  --src-ip CIDR         (default: ${IP_SRC})"
-  echo "  --dst-ip CIDR         (default: ${IP_DST})"
-  echo "  --mtu BYTES           (default: ${MTU})"
-  echo "  --size BYTES          (iperf3 -l, default: ${PAYLOAD})"
-  echo "  --duration SEC        (default: ${DURATION})"
-  echo "  --pre-sleep SEC       (default: ${PRE_SLEEP})"
-  echo "  --port N              (server/client port, default random: ${IPERF_PORT})"
+  echo "  --src-ip CIDR"
+  echo "  --dst-ip CIDR"
+  echo "  --mtu BYTES"
+  echo "  --size BYTES"
+  echo "  --duration SEC"
+  echo "  --pre-sleep SEC"
+  echo "  --port N"
   echo "  --udp"
-  echo "  --udp-bitrate RATE    (e.g. 200M)"
+  echo "  --udp-bitrate RATE"
   echo "  --keep"
   echo "  --cleanup"
   exit 0
@@ -73,14 +70,11 @@ require_root() {
 
 ns_exists() { ip netns list | awk '{print $1}' | grep -qx "$1"; }
 
-# Move interface back to root if inside any namespace
 restore_if_in_ns() {
   local dev="$1"
   local ns
   ns=$(ip netns identify "$dev" 2>/dev/null || true)
-  if [ -n "${ns}" ]; then
-    ip netns exec "$ns" ip link set "$dev" netns 1 || true
-  fi
+  [ -n "$ns" ] && ip netns exec "$ns" ip link set "$dev" netns 1 || true
 }
 
 force_down_root() {
@@ -101,16 +95,12 @@ safe_delete_ns() {
 
 cleanup() {
   log "Cleanup: restoring interfaces"
-
   for iface in "$SRC_IF" "$DST_IF"; do
     [ -n "$iface" ] && restore_if_in_ns "$iface"
   done
-
   safe_delete_ns "$NS_SRC"
   safe_delete_ns "$NS_DST"
-
   rm -f "$STATE_FILE" || true
-
   ok "Cleanup complete"
 }
 
@@ -154,40 +144,48 @@ auto_select_ifaces() {
   ok "Selected: SRC_IF=$SRC_IF DST_IF=$DST_IF"
 }
 
-create_topology() {
-  # do NOT global cleanup of others; only our IFs
-  restore_if_in_ns "$SRC_IF"
-  restore_if_in_ns "$DST_IF"
+# ---------- detect: next DOWN interfaces ----------
+detect_mode_run() {
+  log "--detect: suche Interfaces, die OFFLINE sind wie zukünftiges AUTO"
 
-  force_down_root "$SRC_IF"
-  force_down_root "$DST_IF"
+  local c=()
+  for IF in $(ls /sys/class/net); do
+    [ "$IF" = "lo" ] && continue
 
-  ip netns add "$NS_SRC"
-  ip netns add "$NS_DST"
+    # Pflicht: kein IPv4, sonst würde AUTO sie überspringen
+    ip -4 addr show dev "$IF" | grep -q "inet " && continue
 
-  ip -n "$NS_SRC" link set lo up
-  ip -n "$NS_DST" link set lo up
+    # CHANGED FOR DETECT ----------------------------------------------------
+    # AUTO verwendet nur UP-Ports – detect soll NUR DOWN-Ports vorschlagen
+    [ -r "/sys/class/net/$IF/operstate" ] || continue
+    [ "$(cat /sys/class/net/$IF/operstate)" = "down" ] || continue
+    # ------------------------------------------------------------------------
 
-  ip link set "$SRC_IF" netns "$NS_SRC"
-  ip link set "$DST_IF" netns "$NS_DST"
+    c+=("$IF")
+  done
 
-  ip -n "$NS_SRC" link set "$SRC_IF" mtu "$MTU" up
-  ip -n "$NS_DST" link set "$DST_IF" mtu "$MTU" up
+  if [ ${#c[@]} -lt 2 ]; then
+    err "--detect: keine zwei geeigneten DOWN-Ports gefunden."
+    exit 1
+  fi
 
-  ip -n "$NS_SRC" addr add "$IP_SRC" dev "$SRC_IF"
-  ip -n "$NS_DST" addr add "$IP_DST" dev "$DST_IF"
+  ok "Nächste vorgeschlagene (DOWN) Interfaces wären:"
+  echo "  SRC_IF = ${c[0]}"
+  echo "  DST_IF = ${c[1]}"
+  echo
 
-  save_state
-  ok "Topology ready: $NS_SRC <-> $NS_DST"
+  log "Blinke beide Ports per ethtool --identify (3 Sekunden)"
+  ethtool --identify "${c[0]}" 3 || true
+  ethtool --identify "${c[1]}" 3 || true
+  ok "Blinken abgeschlossen"
+
+  exit 0
 }
 
 start_iperf_server() {
-  # Server IMMER ohne -u starten, auf eigenem Port; PID exakt erfassen
   local pid
   pid="$(ip netns exec "$NS_DST" sh -c "nohup iperf3 -s -p $IPERF_PORT >/dev/null 2>&1 & echo \$!")"
-  # Kurzes Warten und Prüfung, dass der Port lauscht
   sleep 0.3
-  # optionaler Check: falls ss vorhanden
   if ip netns exec "$NS_DST" command -v ss >/dev/null 2>&1; then
     ip netns exec "$NS_DST" ss -lntup 2>/dev/null | grep -q ":$IPERF_PORT " || true
   fi
@@ -196,7 +194,6 @@ start_iperf_server() {
 
 stop_iperf_server() {
   local pid="$1"
-  # Nur diesen konkreten Prozess beenden (kein pkill)
   ip netns exec "$NS_DST" sh -c "
     kill -TERM $pid 2>/dev/null || true
     for i in \$(seq 1 20); do
@@ -207,7 +204,6 @@ stop_iperf_server() {
   "
 }
 
-# ----------------- iperf3 test -----------------
 run_test() {
   local dst_ip jitter="" server_pid=""
   dst_ip=$(ip -n "$NS_DST" -br addr show dev "$DST_IF" | awk '{print $3}' | cut -d/ -f1)
@@ -241,12 +237,9 @@ run_test() {
   IPERF_RC=$?
   set -e
 
-  # Nur unseren eigenen Server beenden
   stop_iperf_server "$server_pid"
 
-  # UDP Jitter extrahieren (letzte Zeile mit 'ms' aus dem Summen-/Receiver-Block)
   if [ "$UDP_MODE" = "1" ]; then
-    # Greife die letzte sinnvolle Zeile mit 'ms' (Jitter) ab und ziehe die Zahl vor 'ms'
     jitter="$(echo "$IPERF_OUT" \
       | awk '/sec/ && /ms/ {line=$0} END{print line}' \
       | awk '{for(i=1;i<=NF;i++){if($i ~ /ms$/){gsub(/ms/,"",$i);v=$i}}} END{if(v!="")print v}')"
@@ -268,10 +261,7 @@ run_test() {
   echo "RX packets delta: $((rx_after - rx_before))"
   echo "CRC src delta: $((crc_src_after - crc_src_before))"
   echo "CRC dst delta: $((crc_dst_after - crc_dst_before))"
-  if [ "$UDP_MODE" = "1" ]; then
-    echo "UDP Jitter: ${jitter:-N/A} ms"
-  fi
-
+  [ "$UDP_MODE" = "1" ] && echo "UDP Jitter: ${jitter:-N/A} ms"
   echo
   echo "$IPERF_OUT"
 
@@ -282,49 +272,13 @@ run_test() {
   fi
 }
 
-# ---------- detect mode (neu) ----------
-detect_mode_run() {
-  log "--detect: Ermittele Interfaces wie --auto"
-
-  local c=()
-  for IF in $(ls /sys/class/net); do
-    [ "$IF" = "lo" ] && continue
-    [ -r "/sys/class/net/$IF/operstate" ] || continue
-    [ "$(cat /sys/class/net/$IF/operstate)" = "up" ] || continue
-    if [ -r "/sys/class/net/$IF/carrier" ]; then
-      [ "$(cat /sys/class/net/$IF/carrier)" = "1" ] || continue
-    fi
-    if ip -4 addr show dev "$IF" | grep -q "inet "; then continue; fi
-
-    c+=("$IF")
-  done
-
-  if [ ${#c[@]} -lt 2 ]; then
-    err "--detect: weniger als 2 geeignete Interfaces gefunden."
-    exit 1
-  fi
-
-  echo
-  ok "AUTO-Auswahl wäre:"
-  echo "  SRC_IF = ${c[0]}"
-  echo "  DST_IF = ${c[1]}"
-  echo
-
-  log "Blinke Ports mit ethtool --identify (3 Sekunden)"
-  ethtool --identify "${c[0]}" 3 || true
-  ethtool --identify "${c[1]}" 3 || true
-  ok "Blinken abgeschlossen"
-
-  exit 0
-}
-
-# ---------- arg parsing ----------
+### ARG PARSING ###
 [ $# -eq 0 ] && usage
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --auto) AUTO_MODE="1"; shift 1 ;;
-    --detect|-d) DETECT_MODE="1"; shift 1 ;;  # <-- NEU
+    --detect|-d) DETECT_MODE="1"; shift 1 ;;
     --src-if) SRC_IF="$2"; shift 2 ;;
     --dst-if) DST_IF="$2"; shift 2 ;;
     --src-ip) IP_SRC="$2"; shift 2 ;;
@@ -345,7 +299,6 @@ done
 
 require_root
 
-# Detect-Modus: nur ermitteln + blinken, dann beenden
 if [ "$DETECT_MODE" = "1" ]; then
   detect_mode_run
 fi
@@ -364,7 +317,6 @@ if [ -z "$SRC_IF" ] || [ -z "$DST_IF" ]; then
   exit 1
 fi
 
-# Auto-cleanup unless keeping
 if [ "$KEEP" != "1" ]; then
   trap cleanup EXIT
 fi
