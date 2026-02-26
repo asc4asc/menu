@@ -76,8 +76,8 @@ if [ -f "$PREV_HW_FILE" ]; then
         echo "No hardware changes detected."
     fi
 else
-    echo "Previous hardware information not found. Creating a new one."
-    update_hw_info
+    echo "Previous hardware information not found. Creat a new one please with -u."
+    # update_hw_info
 fi
 
 
