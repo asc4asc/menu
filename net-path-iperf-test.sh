@@ -290,6 +290,9 @@ detect_mode_run() {
     if ip -4 addr show dev "$IF" | grep -q "inet "; then continue; fi
     c+=("$IF")
   done
+  echo "  IF = ${c}"
+  echo "  IF = ${c[0]}"
+  echo "  IF = ${c[1]}"
   if [ ${#c[@]} -lt 2 ]; then
     err "--detect: weniger als zwei geeignete DOWN-Interfaces gefunden."
     exit 1
