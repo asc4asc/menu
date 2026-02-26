@@ -59,7 +59,7 @@ usage() {
   echo "  --udp-bitrate RATE"
   echo "  --keep"
   echo "  --cleanup"
-  echo "  --detect, -d          Show next two down/no-IP ports and blink their LEDs for 3s."
+  echo "  --detect, -d          Zeigt die nächsten zwei Ports (down/ohne IPv4) und lässt deren LEDs 3s blinken."
   exit 0
 }
 
@@ -131,37 +131,25 @@ save_state() {
 }
 
 ###############################################################################
-# NEW: Blink LEDs of an interface for 3 seconds
+# Blink via ethtool for 3 seconds
 ###############################################################################
 blink_interface() {
   local IF="$1"
-  local LEDPATH="/sys/class/net/$IF/device/leds"
 
-  if [ ! -d "$LEDPATH" ]; then
-    log "Interface $IF has no LED control (no leds/ directory)."
+  if ! command -v ethtool >/dev/null 2>&1; then
+    err "ethtool nicht gefunden. Bitte installieren (z.B. apt install ethtool)."
     return
   fi
 
-  log "Blinking LEDs of $IF for 3 seconds…"
+  if ! ethtool "$IF" >/dev/null 2>&1; then
+    log "ethtool kann $IF nicht abfragen – überspringe Blinken."
+    return
+  fi
 
-  for LED in "$LEDPATH"/*; do
-    [ -d "$LED" ] || continue
-    if [ -w "$LED/trigger" ]; then
-      echo timer > "$LED/trigger"
-      echo 200 > "$LED/delay_on"
-      echo 200 > "$LED/delay_off"
-    fi
-  done
-
-  sleep 3
-
-  # Restore defaults
-  for LED in "$LEDPATH"/*; do
-    [ -d "$LED" ] || continue
-    if [ -w "$LED/trigger" ]; then
-      echo default-on > "$LED/trigger" 2>/dev/null || echo none > "$LED/trigger"
-    fi
-  done
+  log "Blinking $IF for 3 seconds using ethtool…"
+  if ! ethtool -p "$IF" 3 >/dev/null 2>&1; then
+    log "Blinken wird von $IF nicht unterstützt."
+  fi
 }
 
 ###############################################################################
@@ -198,7 +186,7 @@ detect_next_ifaces() {
   done
 
   if [ ${#candidates[@]} -lt 2 ]; then
-    err "Less than two suitable ports found."
+    err "Weniger als zwei passende Ports gefunden."
     exit 1
   fi
 
@@ -207,8 +195,8 @@ detect_next_ifaces() {
 
   echo
   echo "=== DETECT RESULT ==="
-  echo "Next two candidate ports: ${candidates[0]}  ${candidates[1]}"
-  echo "These will likely be chosen by --auto after link-up."
+  echo "Kandidaten (down/ohne IPv4): ${candidates[0]}  ${candidates[1]}"
+  echo "Diese werden nach Link-Up voraussichtlich von --auto gewählt."
   exit 0
 }
 
@@ -272,7 +260,7 @@ create_topology() {
 
 start_iperf_server() {
   local pid
-  pid="$(ip netns exec "$NS_DST" sh -c "nohup iperf3 -s -p $IPERF_PORT >/dev/null 2>&1 & echo \$!")"
+  pid="$(ip netns exec "$NS_DST" sh -c "nohup iperf3 -s -p $IPERF_PORT >/dev/null 2>&1 & echo $!")"
   sleep 0.3
   echo "$pid"
 }
@@ -281,7 +269,7 @@ stop_iperf_server() {
   local pid="$1"
   ip netns exec "$NS_DST" sh -c "
     kill -TERM $pid 2>/dev/null || true
-    for i in \$(seq 1 20); do
+    for i in $(seq 1 20); do
       kill -0 $pid 2>/dev/null || exit 0
       sleep 0.1
     done
