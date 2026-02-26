@@ -29,9 +29,10 @@ UDP_BITRATE="200M" # iperf3 -b bei UDP verpflichtend
 AUTO_MODE="0"
 KEEP="0"
 DO_CLEANUP="0"
-DETECT_MODE="0"
+DETECT_MODE="0"    # <-- NEU: -d/--detect
 
-# Port im Ephemeral-Range (kann per --port gesetzt werden)
+# Eigener Port pro Lauf (Default: zufällig im Ephemeral-Bereich)
+# Kann per --port überschrieben werden
 IPERF_PORT="$(shuf -i 20000-60999 -n 1)"
 
 STATE_FILE="/tmp/ns-iperf-${SELF_PID}.state"
@@ -46,6 +47,7 @@ usage() {
   echo ""
   echo "Options:"
   echo "  --auto"
+  echo "  --detect | -d         (ermittle & blinke die Ports, die --auto wählen würde)"
   echo "  --src-if IF"
   echo "  --dst-if IF"
   echo "  --src-ip CIDR         (default: ${IP_SRC})"
@@ -54,12 +56,11 @@ usage() {
   echo "  --size BYTES          (iperf3 -l, default: ${PAYLOAD})"
   echo "  --duration SEC        (default: ${DURATION})"
   echo "  --pre-sleep SEC       (default: ${PRE_SLEEP})"
-  echo "  --port N              (server/client port, default: ${IPERF_PORT})"
+  echo "  --port N              (server/client port, default random: ${IPERF_PORT})"
   echo "  --udp"
-  echo "  --udp-bitrate RATE"
+  echo "  --udp-bitrate RATE    (e.g. 200M)"
   echo "  --keep"
   echo "  --cleanup"
-  echo "  --detect, -d          Zeigt die nächsten zwei Ports (down/ohne IPv4) und lässt deren LEDs 3s blinken."
   exit 0
 }
 
@@ -72,6 +73,7 @@ require_root() {
 
 ns_exists() { ip netns list | awk '{print $1}' | grep -qx "$1"; }
 
+# Move interface back to root if inside any namespace
 restore_if_in_ns() {
   local dev="$1"
   local ns
@@ -130,98 +132,21 @@ save_state() {
   } > "$STATE_FILE"
 }
 
-###############################################################################
-# Blink via ethtool for 3 seconds
-###############################################################################
-blink_interface() {
-  local IF="$1"
-
-  if ! command -v ethtool >/dev/null 2>&1; then
-    err "ethtool nicht gefunden. Bitte installieren (z.B. apt install ethtool)."
-    return
-  fi
-
-  if ! ethtool "$IF" >/dev/null 2>&1; then
-    log "ethtool kann $IF nicht abfragen – überspringe Blinken."
-    return
-  fi
-
-  log "Blinking $IF for 3 seconds using ethtool…"
-  if ! ethtool -p "$IF" 3 >/dev/null 2>&1; then
-    log "Blinken wird von $IF nicht unterstützt."
-  fi
-}
-
-###############################################################################
-# Detect interfaces
-###############################################################################
-detect_next_ifaces() {
-  log "Detecting two ports currently down/no IPv4…"
-
-  local candidates=()
-
-  for IF in $(ls -1 /sys/class/net | sort -V); do
-    [ "$IF" = "lo" ] && continue
-    [ -e "/sys/class/net/$IF/device" ] || continue
-    [ -r "/sys/class/net/$IF/operstate" ] || continue
-
-    if ip -d link show dev "$IF" 2>/dev/null | grep -q "master "; then
-      continue
-    fi
-
-    if ip -4 addr show dev "$IF" | grep -q "inet "; then
-      continue
-    fi
-
-    local oper carrier
-    oper="$(cat /sys/class/net/$IF/operstate 2>/dev/null || echo unknown)"
-    carrier=0
-    [ -r "/sys/class/net/$IF/carrier" ] && carrier="$(cat /sys/class/net/$IF/carrier)"
-
-    if [ "$oper" != "up" ] || [ "$carrier" != "1" ]; then
-      candidates+=("$IF")
-    fi
-
-    [ ${#candidates[@]} -ge 2 ] && break
-  done
-
-  if [ ${#candidates[@]} -lt 2 ]; then
-    err "Weniger als zwei passende Ports gefunden."
-    exit 1
-  fi
-
-  blink_interface "${candidates[0]}"
-  blink_interface "${candidates[1]}"
-
-  echo
-  echo "=== DETECT RESULT ==="
-  echo "Kandidaten (down/ohne IPv4): ${candidates[0]}  ${candidates[1]}"
-  echo "Diese werden nach Link-Up voraussichtlich von --auto gewählt."
-  exit 0
-}
-
-###############################################################################
-# AUTO mode selection
-###############################################################################
 auto_select_ifaces() {
   log "Auto-selecting interfaces"
   local c=()
   for IF in $(ls /sys/class/net); do
     [ "$IF" = "lo" ] && continue
     [ -r "/sys/class/net/$IF/operstate" ] || continue
-
     [ "$(cat /sys/class/net/$IF/operstate)" = "up" ] || continue
-
     if [ -r "/sys/class/net/$IF/carrier" ]; then
       [ "$(cat /sys/class/net/$IF/carrier)" = "1" ] || continue
     fi
-
     if ip -4 addr show dev "$IF" | grep -q "inet "; then continue; fi
-
     c+=("$IF")
   done
   if [ ${#c[@]} -lt 2 ]; then
-    err "AUTO mode: less than two valid interfaces."
+    err "AUTO mode: less than two valid interfaces found."
     exit 1
   fi
   SRC_IF="${c[0]}"
@@ -229,10 +154,8 @@ auto_select_ifaces() {
   ok "Selected: SRC_IF=$SRC_IF DST_IF=$DST_IF"
 }
 
-###############################################################################
-# Namespace topology + iperf
-###############################################################################
 create_topology() {
+  # do NOT global cleanup of others; only our IFs
   restore_if_in_ns "$SRC_IF"
   restore_if_in_ns "$DST_IF"
 
@@ -259,17 +182,24 @@ create_topology() {
 }
 
 start_iperf_server() {
+  # Server IMMER ohne -u starten, auf eigenem Port; PID exakt erfassen
   local pid
   pid="$(ip netns exec "$NS_DST" sh -c "nohup iperf3 -s -p $IPERF_PORT >/dev/null 2>&1 & echo \$!")"
+  # Kurzes Warten und Prüfung, dass der Port lauscht
   sleep 0.3
+  # optionaler Check: falls ss vorhanden
+  if ip netns exec "$NS_DST" command -v ss >/dev/null 2>&1; then
+    ip netns exec "$NS_DST" ss -lntup 2>/dev/null | grep -q ":$IPERF_PORT " || true
+  fi
   echo "$pid"
 }
 
 stop_iperf_server() {
   local pid="$1"
+  # Nur diesen konkreten Prozess beenden (kein pkill)
   ip netns exec "$NS_DST" sh -c "
     kill -TERM $pid 2>/dev/null || true
-    for i in $(seq 1 20); do
+    for i in \$(seq 1 20); do
       kill -0 $pid 2>/dev/null || exit 0
       sleep 0.1
     done
@@ -277,6 +207,7 @@ stop_iperf_server() {
   "
 }
 
+# ----------------- iperf3 test -----------------
 run_test() {
   local dst_ip jitter="" server_pid=""
   dst_ip=$(ip -n "$NS_DST" -br addr show dev "$DST_IF" | awk '{print $3}' | cut -d/ -f1)
@@ -294,7 +225,7 @@ run_test() {
 
   server_pid="$(start_iperf_server)"
   if [ -z "$server_pid" ]; then
-    err "Could not start iperf3 server"
+    err "Failed to start iperf3 server"
     exit 1
   fi
 
@@ -310,9 +241,12 @@ run_test() {
   IPERF_RC=$?
   set -e
 
+  # Nur unseren eigenen Server beenden
   stop_iperf_server "$server_pid"
 
+  # UDP Jitter extrahieren (letzte Zeile mit 'ms' aus dem Summen-/Receiver-Block)
   if [ "$UDP_MODE" = "1" ]; then
+    # Greife die letzte sinnvolle Zeile mit 'ms' (Jitter) ab und ziehe die Zahl vor 'ms'
     jitter="$(echo "$IPERF_OUT" \
       | awk '/sec/ && /ms/ {line=$0} END{print line}' \
       | awk '{for(i=1;i<=NF;i++){if($i ~ /ms$/){gsub(/ms/,"",$i);v=$i}}} END{if(v!="")print v}')"
@@ -334,7 +268,9 @@ run_test() {
   echo "RX packets delta: $((rx_after - rx_before))"
   echo "CRC src delta: $((crc_src_after - crc_src_before))"
   echo "CRC dst delta: $((crc_dst_after - crc_dst_before))"
-  [ "$UDP_MODE" = "1" ] && echo "UDP Jitter: ${jitter:-N/A} ms"
+  if [ "$UDP_MODE" = "1" ]; then
+    echo "UDP Jitter: ${jitter:-N/A} ms"
+  fi
 
   echo
   echo "$IPERF_OUT"
@@ -346,14 +282,49 @@ run_test() {
   fi
 }
 
-###############################################################################
-# Argument parsing
-###############################################################################
+# ---------- detect mode (neu) ----------
+detect_mode_run() {
+  log "--detect: Ermittele Interfaces wie --auto"
+
+  local c=()
+  for IF in $(ls /sys/class/net); do
+    [ "$IF" = "lo" ] && continue
+    [ -r "/sys/class/net/$IF/operstate" ] || continue
+    [ "$(cat /sys/class/net/$IF/operstate)" = "up" ] || continue
+    if [ -r "/sys/class/net/$IF/carrier" ]; then
+      [ "$(cat /sys/class/net/$IF/carrier)" = "1" ] || continue
+    fi
+    if ip -4 addr show dev "$IF" | grep -q "inet "; then continue; fi
+
+    c+=("$IF")
+  done
+
+  if [ ${#c[@]} -lt 2 ]; then
+    err "--detect: weniger als 2 geeignete Interfaces gefunden."
+    exit 1
+  fi
+
+  echo
+  ok "AUTO-Auswahl wäre:"
+  echo "  SRC_IF = ${c[0]}"
+  echo "  DST_IF = ${c[1]}"
+  echo
+
+  log "Blinke Ports mit ethtool --identify (3 Sekunden)"
+  ethtool --identify "${c[0]}" 3 || true
+  ethtool --identify "${c[1]}" 3 || true
+  ok "Blinken abgeschlossen"
+
+  exit 0
+}
+
+# ---------- arg parsing ----------
 [ $# -eq 0 ] && usage
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --auto) AUTO_MODE="1"; shift 1 ;;
+    --detect|-d) DETECT_MODE="1"; shift 1 ;;  # <-- NEU
     --src-if) SRC_IF="$2"; shift 2 ;;
     --dst-if) DST_IF="$2"; shift 2 ;;
     --src-ip) IP_SRC="$2"; shift 2 ;;
@@ -367,7 +338,6 @@ while [ $# -gt 0 ]; do
     --udp-bitrate) UDP_BITRATE="$2"; shift 2 ;;
     --keep) KEEP="1"; shift 1 ;;
     --cleanup) DO_CLEANUP="1"; shift 1 ;;
-    --detect|-d) DETECT_MODE="1"; shift 1 ;;
     -h|--help|-\?) usage ;;
     *) err "Unknown option: $1"; usage ;;
   esac
@@ -375,13 +345,14 @@ done
 
 require_root
 
+# Detect-Modus: nur ermitteln + blinken, dann beenden
+if [ "$DETECT_MODE" = "1" ]; then
+  detect_mode_run
+fi
+
 if [ "$DO_CLEANUP" = "1" ]; then
   cleanup
   exit 0
-fi
-
-if [ "$DETECT_MODE" = "1" ]; then
-  detect_next_ifaces
 fi
 
 if [ "$AUTO_MODE" = "1" ]; then
@@ -393,6 +364,7 @@ if [ -z "$SRC_IF" ] || [ -z "$DST_IF" ]; then
   exit 1
 fi
 
+# Auto-cleanup unless keeping
 if [ "$KEEP" != "1" ]; then
   trap cleanup EXIT
 fi
