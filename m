@@ -1,3 +1,3 @@
 #!/bin/bash
 
-./menu
+./menu.sh
