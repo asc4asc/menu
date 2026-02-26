@@ -289,10 +289,7 @@ detect_mode_run() {
     [ "$IF" = "lo" ] && continue
     if ip -4 addr show dev "$IF" | grep -q "inet "; then continue; fi
     [ -r "/sys/class/net/$IF/operstate" ] || continue
-    [ "$(cat /sys/class/net/$IF/operstate)" = "down" ] || continue
-    if [ -r "/sys/class/net/$IF/carrier" ]; then
-      [ "$(cat /sys/class/net/$IF/carrier)" = "1" ] || continue
-    fi
+    [ "$(cat /sys/class/net/$IF/operstate)" = "up" ] || continue
     c+=("$IF")
   done
   if [ ${#c[@]} -lt 2 ]; then
