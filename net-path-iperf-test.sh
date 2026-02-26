@@ -29,6 +29,7 @@ UDP_BITRATE="200M" # iperf3 -b bei UDP verpflichtend
 AUTO_MODE="0"
 KEEP="0"
 DO_CLEANUP="0"
+DETECT_MODE="0"    # <-- neu
 
 # Eigener Port pro Lauf (Default: zufällig im Ephemeral-Bereich)
 # Kann per --port überschrieben werden
@@ -59,6 +60,8 @@ usage() {
   echo "  --udp-bitrate RATE    (e.g. 200M)"
   echo "  --keep"
   echo "  --cleanup"
+  echo "  --detect, -d          (zeige die nächsten 2 NICs, die derzeit down/ohne IPv4 sind und"
+  echo "                        voraussichtlich per --auto gewählt werden; beendet danach)"
   exit 0
 }
 
@@ -130,17 +133,78 @@ save_state() {
   } > "$STATE_FILE"
 }
 
+# --- NEU: Detection für die nächsten 2 'down' Ports ---
+detect_next_ifaces() {
+  log "Detecting two ports (down/ohne IPv4), die voraussichtlich per --auto gewählt werden"
+
+  local candidates=()
+  # natürlich sortieren (eth2 vor eth10)
+  for IF in $(ls -1 /sys/class/net | sort -V); do
+    # lo überspringen
+    [ "$IF" = "lo" ] && continue
+
+    # nur physische NICs (haben /device)
+    [ -e "/sys/class/net/$IF/device" ] || continue
+
+    # operstate lesbar?
+    [ -r "/sys/class/net/$IF/operstate" ] || continue
+
+    # wenn Teil von Bond/Bridge (master), überspringen
+    if ip -d link show dev "$IF" 2>/dev/null | grep -q "master "; then
+      continue
+    fi
+
+    # NIC darf keine IPv4-Adresse haben
+    if ip -4 addr show dev "$IF" | grep -q "inet "; then
+      continue
+    fi
+
+    # Status ermitteln
+    local oper carrier
+    oper="$(cat /sys/class/net/$IF/operstate 2>/dev/null || echo unknown)"
+    carrier=0
+    if [ -r "/sys/class/net/$IF/carrier" ]; then
+      carrier="$(cat /sys/class/net/$IF/carrier 2>/dev/null || echo 0)"
+    fi
+
+    # 'nicht up' => oper != up ODER Carrier != 1
+    if [ "$oper" != "up" ] || [ "$carrier" != "1" ]; then
+      candidates+=("$IF")
+    fi
+
+    [ ${#candidates[@]} -ge 2 ] && break
+  done
+
+  if [ ${#candidates[@]} -lt 2 ]; then
+    err "DETECT: weniger als zwei passende Ports gefunden (down, physisch, ohne IPv4, nicht in Bridge/Bond)."
+    exit 1
+  fi
+
+  echo
+  echo "=== DETECT RESULT ==="
+  echo "Kandidaten (down/ohne IPv4): ${candidates[0]} ${candidates[1]}"
+  echo "Hinweis: Sobald Link (Carrier) anliegt, werden diese Ports voraussichtlich durch --auto gewählt."
+  exit 0
+}
+
 auto_select_ifaces() {
   log "Auto-selecting interfaces"
   local c=()
   for IF in $(ls /sys/class/net); do
     [ "$IF" = "lo" ] && continue
     [ -r "/sys/class/net/$IF/operstate" ] || continue
+
+    # muss 'up' sein
     [ "$(cat /sys/class/net/$IF/operstate)" = "up" ] || continue
+
+    # wenn Carrier-File existiert, muss es 1 sein
     if [ -r "/sys/class/net/$IF/carrier" ]; then
       [ "$(cat /sys/class/net/$IF/carrier)" = "1" ] || continue
     fi
+
+    # keine IPv4-Adresse
     if ip -4 addr show dev "$IF" | grep -q "inet "; then continue; fi
+
     c+=("$IF")
   done
   if [ ${#c[@]} -lt 2 ]; then
@@ -299,6 +363,7 @@ while [ $# -gt 0 ]; do
     --udp-bitrate) UDP_BITRATE="$2"; shift 2 ;;
     --keep) KEEP="1"; shift 1 ;;
     --cleanup) DO_CLEANUP="1"; shift 1 ;;
+    --detect|-d) DETECT_MODE="1"; shift 1 ;;
     -h|--help|-\?) usage ;;
     *) err "Unknown option: $1"; usage ;;
   esac
@@ -309,6 +374,11 @@ require_root
 if [ "$DO_CLEANUP" = "1" ]; then
   cleanup
   exit 0
+fi
+
+# Nur Detection? Dann hier beenden.
+if [ "$DETECT_MODE" = "1" ]; then
+  detect_next_ifaces
 fi
 
 if [ "$AUTO_MODE" = "1" ]; then
