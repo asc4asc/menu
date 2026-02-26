@@ -2,4 +2,4 @@
 
 cd $HOME/menu  
 
-menu
+menu.sh
