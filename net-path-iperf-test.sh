@@ -260,7 +260,7 @@ create_topology() {
 
 start_iperf_server() {
   local pid
-  pid="$(ip netns exec "$NS_DST" sh -c "nohup iperf3 -s -p $IPERF_PORT >/dev/null 2>&1 & echo $!")"
+  pid="$(ip netns exec "$NS_DST" sh -c "nohup iperf3 -s -p $IPERF_PORT >/dev/null 2>&1 & echo \$!")"
   sleep 0.3
   echo "$pid"
 }
