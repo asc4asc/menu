@@ -331,7 +331,6 @@ while [ $# -gt 0 ]; do
     --cleanup) DO_CLEANUP="1"; shift 1 ;;
     -h|--help|-\?) usage ;;
     *) err "Unknown option: $1"; usage ;;
-  case_esac=
   esac
 done
 
