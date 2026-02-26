@@ -291,7 +291,7 @@ detect_mode_run() {
     [ -r "/sys/class/net/$IF/operstate" ] || continue
     [ "$(cat /sys/class/net/$IF/operstate)" = "down" ] || continue
     if [ -r "/sys/class/net/$IF/carrier" ]; then
-      [ "$(cat /sys/class/net/$IF/carrier)" = "0" ] || continue
+      [ "$(cat /sys/class/net/$IF/carrier)" = "1" ] || continue
     fi
     c+=("$IF")
   done
