@@ -321,7 +321,7 @@ if [ "$KEEP" != "1" ]; then
   trap cleanup EXIT
 fi
 
-create_topology
+# create_topology
 run_test
 
 if [ "$KEEP" = "1" ]; then
