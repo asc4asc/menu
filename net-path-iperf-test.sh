@@ -47,7 +47,7 @@ usage() {
   echo ""
   echo "Options:"
   echo "  --auto -a"
-  echo "  --detect | -d"
+  echo "  --detect -d"
   echo "  --src-if IF"
   echo "  --dst-if IF"
   echo "  --src-ip CIDR         (default: ${IP_SRC})"
