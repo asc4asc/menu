@@ -2,7 +2,6 @@
 cd && cd menu && sudo ./net-path-iperf-test.sh --auto
 echo "check complete Ethernet of this system on CRC Error!"
 cat /sys/class/net/*/statistics/rx_crc_errors |grep -v "^0" && echo '*** found CRC ERROR ***' && read
-cat /sys/class/net/*/statistics/rx_crc_errors testf.txt |grep -v "^0" && echo '*** found CRC ERROR ***' && read
 exit 0
 
 # old!
