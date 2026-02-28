@@ -23,10 +23,6 @@ dhcp_ntp_servers: []
 # Statische Leases
 dhcp_static_leases: []
 
-# Firewall
-configure_firewall: true
-firewalld_zone: "public"
-
 # dnsmasq Allgemein
-enable_dns_feature: false
+enable_dns_feature: true
 listen_address_dns: "0.0.0.0"
