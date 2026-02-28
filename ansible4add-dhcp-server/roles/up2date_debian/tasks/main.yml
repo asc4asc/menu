@@ -1,0 +1,20 @@
+# Update lists and upgrade packages.
+
+- name: Update apt package lists
+  ansible.builtin.apt:
+    update_cache: true
+    cache_valid_time: 86400
+  become: true
+
+- name: Upgrade packages
+  ansible.builtin.apt:
+    upgrade: dist
+    autoremove: true
+    autoclean: true
+  become: true
+
+- name: Install etckeeper
+  ansible.builtin.apt:
+    name: etckeeper
+    state: latest # noqa package-latest
+  become: true
