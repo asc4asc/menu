@@ -14,21 +14,22 @@
   ansible.builtin.set_fact:
     use_nft: "{{ prefer_nftables and nft_bin.stat.exists }}"
 
-- name: IPv4 Forwarding aktivieren (sysctl)
-  ansible.builtin.sysctl:
-    name: net.ipv4.ip_forward
-    value: "1"
-    state: present
-    reload: true
-  when: enable_ipv4_forward
-
-- name: (optional) IPv6 Forwarding aktivieren (sysctl)
-  ansible.builtin.sysctl:
-    name: net.ipv6.conf.all.forwarding
-    value: "1"
-    state: present
-    reload: true
-  when: enable_ipv6 and (internal_ipv6_cidr | length) > 0
+- name: sysctl Drop-In für Forwarding schreiben
+  become: true
+  ansible.builtin.copy:
+    dest: /etc/sysctl.d/99-ip-forwarding.conf
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      # Forwarding-Einstellungen (managed by Ansible)
+      {% if enable_ipv4_forward | default(false) %}
+      net.ipv4.ip_forward = 1
+      {% endif %}
+      {% if enable_ipv6 | default(false) and (internal_ipv6_cidr | default([])) | length > 0 %}
+      net.ipv6.conf.all.forwarding = 1
+      {% endif %}
+  register: ipf_dropin
 
 - name: == nftables-Pfad anlegen ==
   ansible.builtin.file:
