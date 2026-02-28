@@ -21,4 +21,4 @@
   roles:
     - setup
     - up2date_debian
-    - auto_consol_login
+    - dhcp_dnsmasq
