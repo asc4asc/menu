@@ -1,0 +1,90 @@
+
+---
+- name: Ermitteln, ob nftables verfügbar ist
+  ansible.builtin.stat:
+    path: /usr/sbin/nft
+  register: nft_bin
+
+- name: Ermitteln, ob iptables verfügbar ist
+  ansible.builtin.stat:
+    path: /usr/sbin/iptables
+  register: ipt_bin
+
+- name: Wähle Backend
+  ansible.builtin.set_fact:
+    use_nft: "{{ prefer_nftables and nft_bin.stat.exists }}"
+
+- name: IPv4 Forwarding aktivieren (sysctl)
+  ansible.builtin.sysctl:
+    name: net.ipv4.ip_forward
+    value: "1"
+    state: present
+    reload: true
+  when: enable_ipv4_forward
+
+- name: (optional) IPv6 Forwarding aktivieren (sysctl)
+  ansible.builtin.sysctl:
+    name: net.ipv6.conf.all.forwarding
+    value: "1"
+    state: present
+    reload: true
+  when: enable_ipv6 and (internal_ipv6_cidr | length) > 0
+
+- name: == nftables-Pfad anlegen ==
+  ansible.builtin.file:
+    path: "{{ nft_drop_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when: use_nft
+
+- name: Ensure nftables main config includes drop directory
+  ansible.builtin.blockinfile:
+    path: "{{ nft_main_conf }}"
+    create: true
+    marker: "# {mark} ANSIBLE include nftables.d"
+    block: |
+      include "{{ nft_drop_dir }}/*.nft"
+  when: use_nft
+  notify:
+    - reload nftables
+
+- name: Render nftables NAT snippet (MASQUERADE on {{ wan_iface }})
+  ansible.builtin.template:
+    src: masq.nft.j2
+    dest: "{{ nft_drop_dir }}/{{ nft_snippet }}"
+    owner: root
+    group: root
+    mode: "0644"
+  when: use_nft
+  notify:
+    - reload nftables
+
+- name: == iptables FALLBACK: Stellen Sie sicher, dass iptables vorhanden ist ==
+  ansible.builtin.assert:
+    that:
+      - ipt_bin.stat.exists
+    fail_msg: "Weder nftables noch iptables verfügbar. Installiere 'nftables' oder 'iptables'."
+  when: not use_nft
+
+- name: iptables MASQUERADE Regel (idempotent via check)
+  ansible.builtin.command: >-
+    bash -lc '
+      iptables -t nat -C POSTROUTING -s {{ internal_ipv4_cidr }} -o {{ wan_iface }} -j MASQUERADE 2>/dev/null       || iptables -t nat -A POSTROUTING -s {{ internal_ipv4_cidr }} -o {{ wan_iface }} -j MASQUERADE
+    '
+  when: not use_nft and (internal_ipv4_cidr | length) > 0
+  changed_when: false
+
+- name: iptables MASQUERADE Regel (ohne Quellnetz einschränkung)
+  ansible.builtin.command: >-
+    bash -lc '
+      iptables -t nat -C POSTROUTING -o {{ wan_iface }} -j MASQUERADE 2>/dev/null       || iptables -t nat -A POSTROUTING -o {{ wan_iface }} -j MASQUERADE
+    '
+  when: not use_nft and (internal_ipv4_cidr | length) == 0
+  changed_when: false
+
+- name: iptables persistieren, falls netfilter-persistent vorhanden
+  ansible.builtin.command: bash -lc 'which netfilter-persistent >/dev/null && netfilter-persistent save || true'
+  when: not use_nft
+  changed_when: false

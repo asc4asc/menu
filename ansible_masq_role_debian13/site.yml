@@ -1,0 +1,9 @@
+
+---
+- name: Enable IPv4 NAT (MASQUERADE) on egress interface via reusable role
+  hosts: localhost
+  connection: local
+  gather_facts: true
+  become: true
+  roles:
+    - role: masq

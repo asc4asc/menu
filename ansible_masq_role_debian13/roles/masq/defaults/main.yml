@@ -1,0 +1,22 @@
+
+---
+# Egress/WAN-Interface, über das ins nächste Netz/Internet genattet wird
+wan_iface: "enps8"
+
+# Interne IPv4-Quelle, die genattet werden soll (CIDR). Leerlassen ⇒ Quellnetz nicht eingeschränkt
+internal_ipv4_cidr: "192.168.111.0/24"
+
+# IPv4-Forwarding aktivieren
+enable_ipv4_forward: true
+
+# Optional: IPv6 NAT (selten benötigt). Standard: aus.
+enable_ipv6: false
+internal_ipv6_cidr: ""
+
+# nftables bevorzugen, iptables als Fallback
+prefer_nftables: true
+
+# Pfade/Drops für nftables
+nft_main_conf: "/etc/nftables.conf"
+nft_drop_dir: "/etc/nftables.d"
+nft_snippet: "10-masq-{{ wan_iface }}.nft"

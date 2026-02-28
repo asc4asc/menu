@@ -1,0 +1,13 @@
+
+---
+- name: reload nftables
+  ansible.builtin.block:
+    - name: Stelle sicher, dass nftables-Service aktiv ist
+      ansible.builtin.systemd:
+        name: nftables
+        state: started
+        enabled: true
+
+    - name: Lese /etc/nftables.conf ein (nft -f)
+      ansible.builtin.command: nft -f {{ nft_main_conf }}
+  listen: reload nftables
