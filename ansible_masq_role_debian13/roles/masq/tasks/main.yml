@@ -61,7 +61,7 @@
   notify:
     - reload nftables
 
-- name: == iptables FALLBACK: Stellen Sie sicher, dass iptables vorhanden ist ==
+- name: == iptables FALLBACK Stellen Sie sicher, dass iptables vorhanden ist ==
   ansible.builtin.assert:
     that:
       - ipt_bin.stat.exists

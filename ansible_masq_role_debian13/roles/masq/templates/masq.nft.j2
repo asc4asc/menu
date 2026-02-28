@@ -3,14 +3,13 @@
 # NAT table with IPv4 masquerade on the egress interface
 
 table ip nat {
-  chains {
-    prerouting { type nat hook prerouting priority -100; }
-    postrouting { type nat hook postrouting priority 100; }
+  chain prerouting {
+    type nat hook prerouting priority -100;
   }
   chain postrouting {
-    # Masquerade traffic from internal network out via WAN
+    type nat hook postrouting priority 100;
 {% if internal_ipv4_cidr | length > 0 %}
-    ip saddr {{ internal_ipv4_cidr }} oifname "{{ wan_iface }}" masquerade
+    ip saddr {{ internal_ipv4_cidr }} oifname "{{ wan_iface }}" masquerade;
 {% else %}
     oifname "{{ wan_iface }}" masquerade
 {% endif %}
