@@ -53,7 +53,7 @@
       alias ll='ls -la'
       alias gs='git status'
       alias gp='git pull'
-      alias menu='echo $PATH | grep :.$ > /dev/null || PATH=$PATH:. && cat menu.txt' 
+      alias menu='echo $PATH | grep :.$ > /dev/null || PATH=$PATH:. && cd && cat menu.txt' 
        
 - name: create a small file with instructions
   copy:
