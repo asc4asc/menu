@@ -1,0 +1,16 @@
+
+---
+# Standardwerte für wiederverwendbare Nutzung
+iface: "enps8"
+address: "192.168.111.1"
+prefix: 24
+netmask: "255.255.255.0"   # passend zu prefix=24
+
+# ifupdown-Optionen
+gateway4: ""
+dns_servers: []            # z. B. ["1.1.1.1", "9.9.9.9"]
+
+# NetworkManager-Optionen
+nm_con_name: "static-{{ iface }}"
+nm_gateway: ""
+nm_dns: []                 # z. B. ["1.1.1.1", "9.9.9.9"]

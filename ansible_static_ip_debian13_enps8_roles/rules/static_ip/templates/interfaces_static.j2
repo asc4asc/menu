@@ -1,0 +1,13 @@
+
+# Managed by Ansible (role: static_ip)
+allow-hotplug {{ iface }}
+auto {{ iface }}
+iface {{ iface }} inet static
+    address {{ address }}
+    netmask {{ netmask }}
+{% if gateway4 | length > 0 %}
+    gateway {{ gateway4 }}
+{% endif %}
+{% if dns_servers | length > 0 %}
+    dns-nameservers {% for ns in dns_servers %}{{ ns }}{% if not loop.last %} {% endif %}{% endfor %}
+{% endif %}

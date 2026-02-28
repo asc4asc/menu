@@ -1,0 +1,5 @@
+# Statische Leases (MAC,IP,Hostname)
+# Format: mac,ip,hostname
+{% for lease in dhcp_static_leases %}
+{{ lease.mac }},{{ lease.ip }}{% if lease.name %},{{ lease.name }}{% endif %}
+{% endfor %}

@@ -1,0 +1,62 @@
+---
+- name: Prüfe, ob NetworkManager installiert ist
+  ansible.builtin.stat:
+    path: /usr/bin/nmcli
+  register: nmcli_bin
+
+- name: Prüfe, ob NetworkManager läuft
+  ansible.builtin.shell: "systemctl is-active NetworkManager || true"
+  register: nm_active
+  changed_when: false
+  failed_when: false
+  when: nmcli_bin.stat.exists
+
+- name: Setze Fakt, ob NM verwendet wird
+  ansible.builtin.set_fact:
+    use_networkmanager: "{{ nmcli_bin.stat.exists and (nm_active.stdout | trim) == 'active' }}"
+
+- name: Ausgabe welcher Stack verwendet wird
+  ansible.builtin.debug:
+    msg: >-
+      Verwende {{ 'NetworkManager' if use_networkmanager else 'ifupdown/ifupdown2' }}.
+
+- name: Erzeuge Verzeichnis /etc/network/interfaces.d (wenn ifupdown)
+  ansible.builtin.file:
+    path: /etc/network/interfaces.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when: not use_networkmanager
+
+- name: Schreibe ifupdown-Interface-Datei
+  ansible.builtin.template:
+    src: "interfaces_static.j2"
+    dest: "/etc/network/interfaces.d/{{ iface }}"
+    owner: root
+    group: root
+    mode: "0644"
+  when: not use_networkmanager
+
+- name: NetworkManager erzeuge/aktualisiere Connection
+  community.general.nmcli:
+    conn_name: "{{ nm_con_name }}"
+    ifname: "{{ iface }}"
+    type: ethernet
+    autoconnect: true
+    state: present
+    ip4: "{{ address }}/{{ prefix }}"
+    gw4: "{{ nm_gateway | default(omit) if (nm_gateway | length) > 0 else omit }}"
+    dns4: "{{ nm_dns | default(omit) if (nm_dns | length) > 0 else omit }}"
+    method4: manual
+    method6: ignore
+  when: use_networkmanager
+  notify:
+    - NM reload connection
+
+- name: NetworkManager aktivieren der Connection
+  community.general.nmcli:
+    conn_name: "{{ nm_con_name }}"
+    ifname: "{{ iface }}"
+    state: up
+  when: use_networkmanager

@@ -19,6 +19,4 @@
       delegate_to: localhost
  
   roles:
-    - setup
-    - up2date_debian
     - dhcp_dnsmasq

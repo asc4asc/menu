@@ -1,0 +1,46 @@
+---
+- name: Paket-Cache aktualisieren (Debian/Ubuntu)
+  ansible.builtin.apt:
+    update_cache: yes
+    cache_valid_time: 3600
+  when: ansible_facts.os_family == "Debian"
+
+- name: dnsmasq installieren
+  ansible.builtin.package:
+    name: "{{ dnsmasq_pkg_name }}"
+    state: present
+
+- name: Sicherstellen, dass Include-Verzeichnis existiert
+  ansible.builtin.file:
+    path: "{{ dnsmasq_include_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: dnsmasq Hauptkonfiguration bereitstellen
+  ansible.builtin.template:
+    src: "dnsmasq.conf.j2"
+    dest: "{{ dnsmasq_conf_file }}"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: restart dnsmasq
+
+- name: DHCP-Hosts-Datei bereitstellen (statische Leases)
+  ansible.builtin.template:
+    src: "dhcp-hosts.conf.j2"
+    dest: "{{ dnsmasq_dhcp_hosts_file }}"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: restart dnsmasq
+
+- name: Service aktivieren und starten
+  ansible.builtin.service:
+    name: "{{ dnsmasq_service_name }}"
+    enabled: true
+    state: started
+
+- name: Service-Fakten einsammeln (firewalld prüfen)
+  ansible.builtin.service_facts:

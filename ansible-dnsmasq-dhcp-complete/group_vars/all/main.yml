@@ -1,0 +1,2 @@
+# Globale Defaults (können überschrieben werden)
+dhcp_domain: "lan"

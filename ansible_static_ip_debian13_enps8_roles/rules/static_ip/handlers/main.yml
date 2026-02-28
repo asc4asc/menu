@@ -1,0 +1,10 @@
+---
+- name: NM reload connection
+  ansible.builtin.command: "nmcli connection reload"
+  listen: NM reload connection
+  notify:
+    - NM up connection
+
+- name: NM up connection
+  ansible.builtin.command: "nmcli connection up '{{ nm_con_name }}'"
+  listen: NM up connection

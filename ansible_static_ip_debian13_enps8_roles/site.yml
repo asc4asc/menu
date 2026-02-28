@@ -1,0 +1,9 @@
+
+---
+- name: Apply static IP on enps8 via reusable role (Debian 13)
+  hosts: localhost
+  connection: local
+  gather_facts: true
+  become: true
+  roles:
+    - role: static_ip

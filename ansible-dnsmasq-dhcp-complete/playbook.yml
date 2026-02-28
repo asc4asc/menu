@@ -1,0 +1,6 @@
+---
+- name: Installiere und konfiguriere DHCP mit dnsmasq
+  hosts: dhcp_servers
+  become: true
+  roles:
+    - role: dhcp_dnsmasq

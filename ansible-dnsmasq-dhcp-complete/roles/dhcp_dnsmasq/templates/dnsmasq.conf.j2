@@ -1,0 +1,43 @@
+# Generiert durch Ansible – NICHT manuell bearbeiten
+
+# Optional: DNS-Funktion von dnsmasq
+{% if enable_dns_feature %}
+port=53
+listen-address={{ listen_address_dns }}
+domain={{ dhcp_domain }}
+{% else %}
+# DNS deaktivieren (nur DHCP)
+port=0
+{% endif %}
+
+# DHCP aktivieren auf spezifischem Interface
+interface={{ dhcp_interface }}
+bind-interfaces
+
+# Netz und Range
+dhcp-range={{ dhcp_range_start }},{{ dhcp_range_end }},{{ dhcp_netmask }},{{ dhcp_lease_time }}
+
+# Gateway (Option 3)
+dhcp-option=option:router,{{ dhcp_gateway }}
+
+# DNS-Server (Option 6)
+{% if dhcp_dns_servers | length > 0 %}
+dhcp-option=option:dns-server,{% for s in dhcp_dns_servers %}{{ s }}{% if not loop.last %},{% endif %}{% endfor %}
+{% endif %}
+
+# Domain (Option 15)
+{% if dhcp_domain %}
+dhcp-option=option:domain-name,{{ dhcp_domain }}
+{% endif %}
+
+# NTP-Server (Option 42) optional
+{% if dhcp_ntp_servers | length > 0 %}
+dhcp-option=option:ntp-server,{% for n in dhcp_ntp_servers %}{{ n }}{% if not loop.last %},{% endif %}{% endfor %}
+{% endif %}
+
+# Statische Leases als separate Datei
+dhcp-hostsfile={{ dnsmasq_dhcp_hosts_file }}
+
+# Logging (optional, moderat)
+log-dhcp
+# log-facility=/var/log/dnsmasq.log
