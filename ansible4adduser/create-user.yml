@@ -1,17 +1,17 @@
 ---
 # This playbook add a new user and give him the sudo rigth without password 
 
-# file: ekf_user.yml
+# file: user.yml
 - name: Benutzer anlegen und passwortloses sudo erlauben
   hosts: all
   become: true
   gather_facts: true
 
   vars:
-    ekf_username: "ekf"
-    ekf_uid: null            # Optional: feste UID, z.B. 1201
-    ekf_shell: "/bin/bash"
-    ekf_comment: "EKF Service Account"
+    username: "ansible"
+    uid: null            # Optional: feste UID, z.B. 1201
+    shell: "/bin/bash"
+    comment: "Service Account"
     # Wähle die primäre Sudo-Gruppe je nach OS:
     # Debian/Ubuntu: sudo ; RHEL/CentOS/Rocky: wheel
     sudo_group_debian: "sudo"
@@ -20,35 +20,35 @@
   tasks:
     - name: Primäre Sudo-Gruppe bestimmen (Debian/Ubuntu vs. RHEL)
       set_fact:
-        ekf_sudo_group: >-
+        sudo_group: >-
           {{ sudo_group_debian if ansible_facts['os_family'] == 'Debian'
              else sudo_group_redhat }}
 
     - name: Sudo-Gruppe sicherstellen (falls Distribution sie nicht hat)
       group:
-        name: "{{ ekf_sudo_group }}"
+        name: "{{ sudo_group }}"
         state: present
 
-    - name: Benutzer {{ ekf_username }} anlegen/aktualisieren
+    - name: Benutzer {{ username }} anlegen/aktualisieren
       user:
-        name: "{{ ekf_username }}"
-        comment: "{{ ekf_comment }}"
-        uid: "{{ ekf_uid if ekf_uid is not none else omit }}"
-        shell: "{{ ekf_shell }}"
+        name: "{{ username }}"
+        comment: "{{ comment }}"
+        uid: "{{ uid if uid is not none else omit }}"
+        shell: "{{ shell }}"
         create_home: true
-        groups: "{{ ekf_sudo_group }}"
+        groups: "{{ sudo_group }}"
         append: true
         state: present
 
     - name: Sudoers-Drop-In für passwortloses sudo bereitstellen
       copy:
-        dest: "/etc/sudoers.d/{{ ekf_username }}"
+        dest: "/etc/sudoers.d/{{ username }}"
         owner: root
         group: root
         mode: "0440"
         content: |
           # Managed by Ansible
-          {{ ekf_username }} ALL=(ALL) NOPASSWD:ALL
+          {{ username }} ALL=(ALL) NOPASSWD:ALL
         # visudo-Validierung, scheitert bei Syntaxfehlern
         validate: "visudo -cf %s"
 
