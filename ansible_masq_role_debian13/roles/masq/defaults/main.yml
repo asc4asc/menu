@@ -1,7 +1,7 @@
 
 ---
 # Egress/WAN-Interface, über das ins nächste Netz/Internet genattet wird
-wan_iface: "enps8"
+wan_iface: "enp0s3"
 
 # Interne IPv4-Quelle, die genattet werden soll (CIDR). Leerlassen ⇒ Quellnetz nicht eingeschränkt
 internal_ipv4_cidr: "192.168.111.0/24"
